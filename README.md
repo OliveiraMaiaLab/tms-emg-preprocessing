@@ -107,9 +107,4 @@ Flagged MEPs are plotted in detail. Use the cursor to identify the correct peak 
 
 ---
 
-## References
-
-Faro Viana F, et al. Reducing motor evoked potential amplitude variability through normalization. Front Psychiatry. 2024;15:1279072. doi:10.3389/fpsyt.2024.1279072
-
-Seybert C, et al. Replicability of motor cortex-excitability modulation by intermittent theta burst stimulation. Clin Neurophysiol. 2023;152:22-33. doi:10.1016/j.clinph.2023.04.014
 
