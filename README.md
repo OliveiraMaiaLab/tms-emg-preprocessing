@@ -15,7 +15,7 @@ Set the `name` variable to the filename and run the section. Filenames must foll
 
 {subID}{ses}{hemi}_yyyy-mm-dd_HH-MM-SS
 
-![Alt text](images\startup_menu.png)
+![Alt text](images/startup_menu.png)
 
 
 </details>
