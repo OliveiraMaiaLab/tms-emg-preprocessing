@@ -1,10 +1,15 @@
 # MEP Preprocessing
 
-Offline analysis of MEPs was performed using a structured preprocessing pipeline. Raw EMG signals were denoised with a three-level adaptive wavelet filter (Daubechies family, db1) and BayesShrink soft thresholding (Chang et al., 2000). Wavelet filtering is particularly effective for non-stationary signals and for separating noise sources with overlapping frequency content (Samann & Schanze, 2019; Wahab & O’Haver, 2020; Machetanz et al., 2021). A third-order Savitzky–Golay filter with a window size of 5 (Awal et al., 2011) was then applied for smoothing. This approach was preferred over conventional band-pass filtering, which introduced distortions in our dataset.
+This repository provides a **structured preprocessing pipeline for motor evoked potentials (MEPs)** acquired with transcranial magnetic stimulation (TMS).  
 
-Following preprocessing, MEPs were screened according to established exclusion criteria. Trials were discarded if they showed pre-activation or if peak-to-peak amplitude was <50 μV. Background EMG was assessed with an automated procedure: a 500 ms artifact-free segment of EMG was selected as baseline, and the 50 ms preceding each TMS pulse were compared against it. Pre-activation was defined when the rectified mean amplitude exceeded baseline by >2 SD (McCambridge et al., 2020) or if the root mean square amplitude exceeded 15 μV (Hinder et al., 2014). Trials meeting both conditions were excluded.
+The workflow includes:  
+- **Signal denoising** with a three-level adaptive wavelet filter (Daubechies family, db1) and BayesShrink soft thresholding.  
+- **Smoothing** with a Savitzky–Golay filter, chosen over conventional band-pass filtering to minimize distortions.  
+- **Automated screening** of trials based on amplitude thresholds and background EMG activity, with criteria adapted from established literature.  
 
-The pipeline is designed for MEP analysis and amplitude extraction, requires minimal coding expertise, and is available at `YYY@github.com` alongside a step-by-step guide.
+The pipeline is designed to **facilitate amplitude extraction and quality control of MEPs** with minimal coding expertise. It combines automated detection with guided manual correction to ensure reliable results.  
+
+A step-by-step guide is included to support **file selection, EMG segmentation, epoch definition, visual inspection, and correction of flagged trials**.  
 
 ---
 
@@ -101,4 +106,10 @@ Flagged MEPs are plotted in detail. Use the cursor to identify the correct peak 
 
 </details>
 
+---
+
+## References
+
+Faro Viana F, et al. Reducing motor evoked potential amplitude variability through normalization. Front Psychiatry. 2024;15:1279072. doi:10.3389/fpsyt.2024.1279072
+Seybert C, et al. Replicability of motor cortex-excitability modulation by intermittent theta burst stimulation. Clin Neurophysiol. 2023;152:22-33. doi:10.1016/j.clinph.2023.04.014
 
