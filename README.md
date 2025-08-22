@@ -9,7 +9,12 @@ The workflow includes:
 
 The pipeline is designed to **facilitate amplitude extraction and quality control of MEPs** with minimal coding expertise. It combines automated detection with guided manual correction to ensure reliable results.  
 
+This pipeline has been used and described in:  
+- Faro Viana F, et al. *Reducing motor evoked potential amplitude variability through normalization.* **Front Psychiatry.** 2024;15:1279072. doi:[10.3389/fpsyt.2024.1279072](https://doi.org/10.3389/fpsyt.2024.1279072)  
+- Seybert C, et al. *Replicability of motor cortex-excitability modulation by intermittent theta burst stimulation.* **Clin Neurophysiol.** 2023;152:22–33. doi:[10.1016/j.clinph.2023.04.014](https://doi.org/10.1016/j.clinph.2023.04.014)  
+
 A step-by-step guide is included to support **file selection, EMG segmentation, epoch definition, visual inspection, and correction of flagged trials**.  
+
 
 > ⚠️ **Note:**  
 > The step-by-step guide refers to an **older version of the pipeline**, which is available in the folder [`old_pipeline`](./old_pipeline).  
