@@ -11,6 +11,10 @@ The pipeline is designed to **facilitate amplitude extraction and quality contro
 
 A step-by-step guide is included to support **file selection, EMG segmentation, epoch definition, visual inspection, and correction of flagged trials**.  
 
+> ⚠️ **Note:**  
+> The step-by-step guide refers to an **older version of the pipeline**, which is available in the folder [`old_pipeline`](./old_pipeline).  
+> This repository is currently being updated with a **new GUI-based pipeline**, which will replace the older version.
+
 ---
 
 <details>
