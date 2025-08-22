@@ -15,9 +15,6 @@ Set the `name` variable to the filename and run the section. Filenames must foll
 
 {subID}{ses}{hemi}_yyyy-mm-dd_HH-MM-SS
 
-![Alt text](images/startup_menu.png)
-
-
 </details>
 
 <details>
@@ -30,13 +27,11 @@ After running the section, the EMG trace and TMS pulse time series will be displ
 
 Split the EMG signal into segments corresponding to different phases of the experiment.
 
-**Figure layout:**
+![Alt text](./images/pipeline1.png)
 
-- **Left panel (top):** TMS pulse markers  
-- **Left panel (bottom):** Raw EMG signal  
-- **Right panel:** Code snippet to be edited  
+- **Left panel (top):** TMS pulse markers; **Left panel (bottom):** Raw EMG signal; **Right panel:** Code snippet to be edited  
 
-**To segment manually:**
+**To segment:**
 
 1. Use the figure cursor in Spyder (left panel) to locate the end of each segment, using TMS pulse markers as reference.  
 2. Enter the values into the corresponding segment variables in the script (right panel).  
@@ -51,7 +46,7 @@ After filling in the variables, execute and advance to the next section.
 
 Define the start of a 3 s window for MVIC epochs. This step can be skipped if MEP amplitude is analyzed without normalization.
 
-**Figure layout:**
+![Alt text](./images/pipeline2.png)
 
 - **Left panel:** MVIC raw trace  
 - **Right panel (top):** Code snippet  
@@ -66,12 +61,9 @@ Run the section to display the selected MVIC epoch. The amplitude should be stab
 
 All MEPs will be plotted together. Define the analysis window by specifying the time range (in ms) relative to the TMS pulse.
 
-**Examples of MEP overlap plots:**
+![Alt text](./images/pipeline3.png)
 
-- Without TMS artifact (top left)  
-- With large artifact (top right)  
-- With complex morphology (bottom left)  
-- Bottom right: Code snippet  
+**Examples of MEP overlap plots:** Without TMS artifact (top left); With large artifact (top right); With complex morphology (bottom left); Bottom right: Code snippet  
 
 </details>
 
@@ -82,10 +74,9 @@ All MEPs will be plotted together. Define the analysis window by specifying the 
 
 MEPs from each single-pulse block are plotted with markers around detected peaks. Inspect the plots and list in the code snippet the MEP IDs where automatic detection failed.
 
-**Figure layout:**
+![Alt text](./images/pipeline4.png)
 
-- **Top:** Example of MEPs with automatic markers. In Pulse 25 the maximum peak requires manual correction.  
-- **Bottom:** Code snippet to be edited  
+- **Top:** Example of MEPs with automatic markers. In Pulse 25 the maximum peak requires manual correction; **Bottom:** Code snippet to be edited  
 
 </details>
 
@@ -94,10 +85,9 @@ MEPs from each single-pulse block are plotted with markers around detected peaks
 
 Flagged MEPs are plotted in detail. Use the cursor to identify the correct peak values and record them in the generated Excel file.
 
-**Figure layout:**
+![Alt text](./images/pipeline5.png)
 
-- **Left:** Detailed view of a flagged MEP (Pulse 25), with red cross indicating the correct peak  
-- **Right:** Excel file for manual correction of peak values
+- **Left:** Detailed view of a flagged MEP (Pulse 25), with red cross indicating the correct peak; **Right:** Excel file for manual correction of peak values
 
 </details>
 
