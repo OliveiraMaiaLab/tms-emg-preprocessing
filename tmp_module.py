@@ -256,6 +256,18 @@ def view_channels_bokeh(data, hemispheres, tms_indexes, fs=4000):
     t = np.arange(data.shape[1]) / fs  # time vector in seconds
     initial_range = 4 * 60  # 4 minutes in seconds
 
+    # Plot colors
+    overview_timeseries_color = 'black'
+    overview_timeseries_alpha = 1
+    overview_pulse_color = 'gray'
+    overview_pulse_alpha = .5
+    rangetool_color = 'gray'
+    rangetool_alpha = .5
+    range_timeseries_color = 'black'
+    range_timeseries_alpha = 1
+    range_pulse_color = 'gray'
+    range_pulse_alpha = .5
+
     for idx, hemi in enumerate(hemispheres):
         start = t[0]
         end = min(t[0] + initial_range, t[-1])
@@ -272,7 +284,7 @@ def view_channels_bokeh(data, hemispheres, tms_indexes, fs=4000):
         for pulse_idx in tms_indexes:
             pulse_time = pulse_idx / fs
             p.add_layout(Span(location=pulse_time, dimension='height',
-                              line_color='lightgray', line_width=1, line_alpha=0.5, line_dash='dashed'))
+                              line_color='gray', line_width=1, line_alpha=0.5, line_dash='dashed'))
 
         # Overview plot
         overview = figure(height=100, width=800, tools="", toolbar_location=None,
@@ -282,11 +294,11 @@ def view_channels_bokeh(data, hemispheres, tms_indexes, fs=4000):
         for pulse_idx in tms_indexes:
             pulse_time = pulse_idx / fs
             overview.add_layout(Span(location=pulse_time, dimension='height',
-                                     line_color='lightgray', line_width=1, line_alpha=0.5, line_dash='dashed'))
+                                     line_color='gray', line_width=1, line_alpha=0.5, line_dash='dashed'))
 
         # RangeTool
         range_tool = RangeTool(x_range=p.x_range)
-        range_tool.overlay.fill_color = "lightgray"
+        range_tool.overlay.fill_color = "gray"
         range_tool.overlay.fill_alpha = 0.2
         overview.add_tools(range_tool)
         overview.toolbar.active_multi = range_tool

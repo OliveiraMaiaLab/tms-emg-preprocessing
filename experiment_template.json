@@ -1,0 +1,21 @@
+{
+  "experiment_name": "PDM_TMS_Study",
+  "channels": {
+    "synch_pulse": 0,
+    "right": 1,
+    "left": 2
+  },
+  "experiment_structure": [
+    "mh",
+    "rmt",
+    "mvics",
+    "amt",
+    "bmeps",
+    "itbs",
+    "t0meps",
+    "t10meps",
+    "t20meps",
+    "t30meps",
+    "rmt_pos"
+  ]
+}
