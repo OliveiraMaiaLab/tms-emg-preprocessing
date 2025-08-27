@@ -104,8 +104,8 @@ DEFAULT_INPUT = os.path.join(SCRIPT_DIR, "example_data.bin")
 # Initialize session state
 # -------------------------
 if "step" not in st.session_state:
-    # st.session_state.step = "input"
-    st.session_state.step = "proceed"
+    st.session_state.step = "input"
+    # st.session_state.step = "proceed"
 if "metadata" not in st.session_state:
     st.session_state.metadata = {
         "template_file": DEFAULT_TEMPLATE,
@@ -265,7 +265,7 @@ elif st.session_state.step == "proceed":
                 ranges_store[hemi] = (start, end)
 
         data, tms_indexes = tms_utils.load_data(meta['input_file'])
-        data_ds, factor = downsample(data, target_points=10000)
+        data_ds, factor = downsample(data, target_points=25000)
 
         plots = tms_utils.view_channels_bokeh_server(
             data_ds,
