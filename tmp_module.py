@@ -274,7 +274,7 @@ def view_channels_bokeh_server(data, hemispheres, tms_indexes, fs=4000, range_si
     """
     layouts = []
     t = np.arange(data.shape[1]) / fs
-    initial_range = 4 * 60  # 4 minutes
+    initial_range = 320 # seconds
 
     for idx, hemi in enumerate(hemispheres):
         start = t[0]
