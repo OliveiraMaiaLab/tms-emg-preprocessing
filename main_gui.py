@@ -104,8 +104,8 @@ DEFAULT_INPUT = os.path.join(SCRIPT_DIR, "example_data.bin")
 # Initialize session state
 # -------------------------
 if "step" not in st.session_state:
-    st.session_state.step = "input"
-    # st.session_state.step = "proceed"
+    # st.session_state.step = "input"
+    st.session_state.step = "proceed"
 if "metadata" not in st.session_state:
     st.session_state.metadata = {
         "template_file": DEFAULT_TEMPLATE,
@@ -213,7 +213,8 @@ elif st.session_state.step == "confirm":
 # --- Step 3: Proceed ---
 
 elif st.session_state.step == "proceed":
-
+    from bokeh.layouts import row as bk_row, column as bk_column
+    from bokeh.models import Div, TextInput, Button, Spacer
     # ---- Shared store for live ranges (thread-safe) ----
     ranges_lock = threading.Lock()
     ranges_store = {}  # e.g., {"Left": (start, end), "Right": (start, end)}
@@ -257,24 +258,131 @@ elif st.session_state.step == "proceed":
     ])
     meta['exp_structure'] = template["experiment_structure"]
 
+    
+    num_channels = len(meta["hemispheres"])
+    per_channel_px = 800
+    iframe_height = per_channel_px * max(1, num_channels)
+    iframe_width = 3000
+
     # ---- Bokeh server app ----
     def bkapp(doc):
-        # sink function gets called by Bokeh callbacks on every range change
+        # ---------- SIZING CONTROLS ----------
+        RIGHT_LABEL_W   = 80     # px
+        RIGHT_INPUT_W   = 140    # px
+        RIGHT_BUTTON_W  = 60     # px
+        COL_GAP         = 3      # px gap between columns (2 gaps per row)
+        PANEL_PADDING   = 18     # px padding for the scroll pane (top/bottom/left)
+        SCROLLBAR_W     = 16     # px reserved for vertical scrollbar (Win ~16-18; macOS overlay -> set 0)
+        HEADER_H        = 24
+        ROW_H           = 28
+        BODY_SPACING    = 0      # vertical spacing between stacked rows
+        # TITLE_BOTTOM_SP = 0
+        PANEL_H         = 400    # visible height of right panel (scrolls vertically)
+        SAVE_BUTTON_HEIGHT = 28
+
+        # Content width is the sum of columns + the two gaps between them
+        CONTENT_W = RIGHT_LABEL_W + RIGHT_INPUT_W + RIGHT_BUTTON_W + 2 * COL_GAP
+        # Final scroll container width includes padding (L+R) and the scrollbar gutter
+        RIGHT_PANEL_W = CONTENT_W + (2 * PANEL_PADDING) + SCROLLBAR_W
+
+        # ---------- live ranges ----------
+        block_ranges = {}
+
         def sink(hemi, start, end):
             with ranges_lock:
                 ranges_store[hemi] = (start, end)
 
+        # ---------- data + plots (left) ----------
         data, tms_indexes = tms_utils.load_data(meta['input_file'])
-        data_ds, factor = downsample(data, target_points=25000)
+        data_ds, factor = downsample(data, target_points=10000)
 
         plots = tms_utils.view_channels_bokeh_server(
             data_ds,
             meta["hemispheres"],
             tms_indexes // factor,
-            fs=meta["sampling_rate"]/factor,
-            range_sink=sink,   # << hook in sink
+            fs=meta["sampling_rate"] / factor,
+            range_sink=sink,
         )
-        doc.add_root(bk_column(*plots, sizing_mode="stretch_width"))
+        left_col = bk_column(*plots, sizing_mode="stretch_both")
+
+        # ---------- CSS (reserve scrollbar gutter, avoid horizontal scroll) ----------
+        doc.add_root(Div(text=f"""
+        <style>
+        .scrollpane {{
+            overflow-y: auto;
+            overflow-x: hidden;
+            box-sizing: border-box;
+            /* top right bottom left padding: add scrollbar width on the right */
+            padding: {PANEL_PADDING}px {PANEL_PADDING + SCROLLBAR_W}px {PANEL_PADDING}px {PANEL_PADDING}px;
+            border: 0;
+            border-radius: 0;
+            /* keeps a stable gutter even when content height changes */
+            scrollbar-gutter: stable;
+        }}
+        .lab   {{ text-align: right; padding-right: 0; margin: 0; }}
+        .tight {{ margin: 0; padding: 0; }}
+        </style>
+        """, width=0, height=0))
+
+        # ---------- right panel ----------
+        title_div = Div(text="<h3 class='tight'>Experiment Blocks</h3>")
+
+        hdr = bk_row(
+            Div(text="<b>Block</b>",      css_classes=["lab"], width=RIGHT_LABEL_W,  height=HEADER_H),
+            Div(text="<b>Ranges (s)</b>",                    width=RIGHT_INPUT_W,  height=HEADER_H),
+            Div(text="&nbsp;",                               width=RIGHT_BUTTON_W, height=HEADER_H),
+            sizing_mode="fixed",
+            spacing=COL_GAP,
+        )
+
+        rows = [hdr]
+
+        def make_set_callback(part, text_input):
+            def _cb():
+                with ranges_lock:
+                    current = dict(ranges_store)
+                block_ranges[part] = current
+                text_input.value = ", ".join(f"{s:.1f}-{e:.1f}" for _, (s, e) in current.items())
+            return _cb
+
+        for part in meta['exp_structure']:
+            lab = Div(text=f"<b>{part}</b>", css_classes=["lab"], width=RIGHT_LABEL_W,  height=ROW_H)
+            ti  = TextInput(placeholder="e.g. 0.0-240.0, 5.0-30.0", width=RIGHT_INPUT_W,  height=ROW_H)
+            btn = Button(label="Set", button_type="primary",         width=RIGHT_BUTTON_W, height=ROW_H)
+            btn.on_click(make_set_callback(part, ti))
+            rows.append(bk_row(lab, ti, btn, sizing_mode="fixed", spacing=COL_GAP))
+
+        scroll_body = bk_column(*rows, sizing_mode="stretch_width", spacing=BODY_SPACING)
+        scroll_container = bk_column(
+            scroll_body,
+            width=RIGHT_PANEL_W,    # ← includes scrollbar gutter
+            height=PANEL_H,
+            sizing_mode="fixed",
+        )
+        scroll_container.css_classes = ["scrollpane"]
+
+        save_btn = Button(label="Save selections to JSON", button_type="success", width=RIGHT_PANEL_W, height = SAVE_BUTTON_HEIGHT)
+
+        def save_all():
+            out = {p: {h: [float(s), float(e)] for h, (s, e) in rr.items()} for p, rr in block_ranges.items()}
+            out_path = os.path.join(SCRIPT_DIR, "block_ranges.json")
+            with open(out_path, "w") as f:
+                json.dump(out, f, indent=2)
+            save_btn.label = "Saved ✅"
+
+        save_btn.on_click(save_all)
+
+        right_col = bk_column(
+            title_div,
+            # Spacer(height=TITLE_BOTTOM_SP),
+            scroll_container,
+            save_btn,
+            width=RIGHT_PANEL_W,
+            sizing_mode="fixed",
+            spacing=6,
+        )
+
+        doc.add_root(bk_row(left_col, right_col, sizing_mode="stretch_both", spacing=10))
 
     # Detect Streamlit port for websocket allowlist
     streamlit_port = os.environ.get("STREAMLIT_SERVER_PORT", "8501")
@@ -283,8 +391,10 @@ elif st.session_state.step == "proceed":
     def run_bokeh_server(port_container):
         server = Server(
             {'/bkapp': bkapp},
-            port=0,
-            allow_websocket_origin=[f"localhost:{streamlit_port}"]
+            port=0,                         # let Bokeh pick a free port
+            allow_websocket_origin=["*"],   # allow any origin (LOCAL DEV ONLY)
+            address="127.0.0.1",            # keep it bound to localhost
+            use_xheaders=True,
         )
         server.start()
         port_container.append(server.port)
@@ -297,57 +407,22 @@ elif st.session_state.step == "proceed":
         time.sleep(0.1)
     bokeh_port = port_container[0]
 
-    # --- Two-column layout (plots left, blocks right) ---
-    col_plot, col_right = st.columns([7, 3])
 
-    num_channels = len(meta["hemispheres"])
-    per_channel_px = 500
-    iframe_height = per_channel_px * max(1, num_channels)
-    iframe_width = 3000
+    col_plot = st.container()
 
     with col_plot:
         bokeh_url = f"http://localhost:{bokeh_port}/bkapp"
-        components.html(
-            f'''
+        st.markdown(
+            f"""
+            <div style="width:100%;">
             <iframe
                 src="{bokeh_url}"
-                style="width:100%; height:{iframe_height}px; border:none;"
+                style="display:block; width:100%; height:{iframe_height}px; border:none;"
             ></iframe>
-            ''',
-            height=iframe_height,
-            width=iframe_width
-)
-    with col_right:
-        render_text(
-            'Experiment Blocks',
-            font_color="black",
-            font_weight="bold",          # normal or bold
-            horizontal_alignment="center",  # left, center, right
-            font_size=None,                # CSS font size (if None, use heading map)
-            nowrap=True,                   # True = do not wrap, False = allow wrapping
-            heading_level=3             # None for normal text, or 1–5 for heading style
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-
-        with st.container(height=iframe_height, border=True):
-            for part in meta['exp_structure']:
-                c1, c2, c3 = st.columns([1, 1, 1])
-                with c1:
-                    render_text(
-                        part,
-                        font_color="black",
-                        font_weight="bold",          # normal or bold
-                        horizontal_alignment="right",  # left, center, right
-                        font_size=None,                # CSS font size (if None, use heading map)
-                        nowrap=True,                   # True = do not wrap, False = allow wrapping
-                        heading_level=5             # None for normal text, or 1–5 for heading style
-                    )
-
-                with c2:
-                    st.text_input(label=part, label_visibility='collapsed', key=f"input_{part}")
-                with c3:
-                    st.button(label="Set", key=f"btn_{part}",
-                              on_click=setRange, kwargs={'part': part})
-
     st.success("TMS + Hemispheres plotted successfully! 🚀")
 
 # %%
