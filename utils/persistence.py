@@ -14,8 +14,8 @@ from typing import Dict, List, Tuple
 
 RUN_DIR = Path.cwd()
 SETTINGS_FILE = RUN_DIR / ".tms_emg_gui_settings.json"
-DEFAULT_TEMPLATE = str(RUN_DIR / "experiment_template.json")
-DEFAULT_INPUT = str(RUN_DIR / "example_data.bin")
+DEFAULT_TEMPLATE = str(RUN_DIR / "example_data/experiment_template.json")
+DEFAULT_INPUT = str(RUN_DIR / "example_data/example_data.bin")
 
 # ---------- low-level json helpers ----------
 def _json_read(path: Path, fallback: dict) -> dict:

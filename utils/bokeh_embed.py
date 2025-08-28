@@ -11,7 +11,7 @@ import time, threading, os, json, numpy as np
 from bokeh.server.server import Server
 from bokeh.layouts import column as bk_column, row as bk_row
 from bokeh.models import Div, TextInput, Button, Range1d
-import tmp_module as tms_utils
+import utils.tmp_module as tms_utils
 from utils.persistence import write_segmentation_ranges
 
 def _downsample(data, target_points=2000):
