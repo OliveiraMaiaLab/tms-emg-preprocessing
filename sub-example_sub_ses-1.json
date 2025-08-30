@@ -1,0 +1,59 @@
+{
+  "info": {
+    "template_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\example_data\\experiment_template.json",
+    "input_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\example_data\\example_data.bin",
+    "sampling_rate": 4000,
+    "session": 1,
+    "hemispheres": [
+      "left"
+    ]
+  },
+  "segmentation": {
+    "mh": [],
+    "rmt": [],
+    "mvics": [],
+    "amt": [],
+    "bmeps": [],
+    "itbs": [],
+    "t0meps": [],
+    "t10meps": [],
+    "t20meps": [],
+    "t30meps": [],
+    "rmt_pos": [],
+    "mvic": []
+  },
+  "meps": {
+    "bmeps": {
+      "left": []
+    },
+    "t0meps": {
+      "left": []
+    },
+    "t10meps": {
+      "left": []
+    },
+    "t20meps": {
+      "left": []
+    },
+    "t30meps": {
+      "left": []
+    }
+  },
+  "mep_amplitudes": {
+    "bmeps": {
+      "left": []
+    },
+    "t0meps": {
+      "left": []
+    },
+    "t10meps": {
+      "left": []
+    },
+    "t20meps": {
+      "left": []
+    },
+    "t30meps": {
+      "left": []
+    }
+  }
+}

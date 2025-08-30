@@ -4,8 +4,6 @@
 Utility functions for EMG data processing, peak detection, filtering, and preprocessing.
 """
 # --- Core scientific stack ---
-import os
-import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,14 +12,6 @@ import matplotlib.pyplot as plt
 from skimage.restoration import denoise_wavelet
 from scipy.signal import find_peaks, savgol_filter, detrend
 from math import isnan
-
-# --- Bokeh (visualization) ---
-from bokeh.plotting import figure
-from bokeh.models import (
-    ColumnDataSource, RangeTool, Span,
-    Button, Div, Range1d, CustomJS
-)
-from bokeh.layouts import column, row
 
 # ------------------------------
 # Time & Conversion Functions
@@ -258,118 +248,4 @@ def get_info(path):
     date = temp[3] + ' at ' + temp[4]
     return subject, session, hemi, date
     
-def view_channels_bokeh_server(data, hemispheres, tms_indexes, fs=4000, range_sink=None):
-    """
-    Build interactive Bokeh plots for EMG channels with a RangeTool overview.
 
-    Args:
-        data (np.ndarray): Shape (n_channels, n_samples)
-        hemispheres (list[str]): Labels for each channel (e.g., ['Left', 'Right'])
-        tms_indexes (list[int]): Sample indices of TMS pulses
-        fs (float): Sampling frequency in Hz
-        range_sink (callable): Optional function called on every range change:
-                               range_sink(hemi, start, end)
-    Returns:
-        list of Bokeh layout objects
-    """
-    layouts = []
-    t = np.arange(data.shape[1]) / fs
-    initial_range = 320 # seconds
-
-    for idx, hemi in enumerate(hemispheres):
-        start = t[0]
-        end = min(t[0] + initial_range, t[-1])
-        y = data[idx] / 1000.0
-        y_start, y_end = float(np.min(y)), float(np.max(y))
-
-        # Main plot
-        p = figure(
-            height=300,
-            title=f"{hemi} Hemisphere",
-            tools="xpan,xwheel_zoom,reset,box_zoom",
-            active_scroll="xwheel_zoom",
-            x_range=Range1d(start=start, end=end),
-            y_range=Range1d(start=y_start, end=y_end),
-            y_axis_label="EMG (mV)",
-            sizing_mode="stretch_width",
-        )
-        source_hemi = ColumnDataSource(data=dict(x=t, y=y))
-        p.line('x', 'y', source=source_hemi, line_width=2)
-
-        # Pulse markers
-        for pulse_idx in tms_indexes:
-            p.add_layout(Span(location=pulse_idx/fs, dimension='height',
-                              line_color='gray', line_width=1,
-                              line_alpha=0.5, line_dash='dashed'))
-
-        # Overview plot
-        overview = figure(
-            height=120,
-            tools="",
-            toolbar_location=None,
-            x_range=Range1d(start=t[0], end=t[-1]),
-            y_range=Range1d(start=y_start, end=y_end),
-            y_axis_label="EMG (mV)",
-            sizing_mode="stretch_width",
-        )
-        overview.line('x', 'y', source=source_hemi)
-
-        for pulse_idx in tms_indexes:
-            overview.add_layout(Span(location=pulse_idx/fs, dimension='height',
-                                     line_color='gray', line_width=1,
-                                     line_alpha=0.5, line_dash='dashed'))
-
-        # RangeTool
-        range_tool = RangeTool(x_range=p.x_range)
-        range_tool.overlay.fill_color = "gray"
-        range_tool.overlay.fill_alpha = 0.2
-        overview.add_tools(range_tool)
-        overview.toolbar.active_multi = range_tool
-
-        # Reset Y-range button
-        reset_button = Button(label="Reset Y-Range", width=120)
-        reset_button.js_on_click(CustomJS(args=dict(p=p, y_start=y_start, y_end=y_end), code="""
-            p.y_range.start = y_start;
-            p.y_range.end = y_end;
-        """))
-
-        # Info widgets
-        pulse_div = Div(text=f"<b>Visible pulses:</b> 0", width=150, style={'text-align':'center'})
-        range_div = Div(text=f"<b>Visible range:</b> {start:.1f} - {end:.1f} s", width=800, style={'text-align':'center'})
-
-        # Python callback for range updates
-        def update_range(attr, old, new, x_range=p.x_range, pulse_div=pulse_div,
-                         range_div=range_div, hemi=hemi):
-            visible_start = float(x_range.start)
-            visible_end = float(x_range.end)
-            # Count visible pulses
-            count = sum(1 for pulse in tms_indexes if visible_start*fs <= pulse <= visible_end*fs)
-            pulse_div.text = f"<b>Visible pulses:</b> {count}"
-            range_div.text = f"<b>Visible range:</b> {visible_start:.2f} - {visible_end:.2f} s"
-
-            # Push to external sink if provided
-            if range_sink is not None:
-                try:
-                    range_sink(hemi, visible_start, visible_end)
-                except Exception as e:
-                    print(f"[range_sink error] {e}")
-
-            # # Debug log
-            # print(f"[Python callback] {hemi} range: {visible_start:.2f} - {visible_end:.2f} s")
-
-        # Attach callbacks
-        p.x_range.on_change("start", update_range)
-        p.x_range.on_change("end", update_range)
-
-        # Top row with controls and info
-        top_row = row(reset_button, pulse_div, range_div, sizing_mode="stretch_width")
-        layouts.append(column(top_row, p, overview, sizing_mode="stretch_width"))
-
-        # Call sink once initially so state is populated
-        if range_sink is not None:
-            try:
-                range_sink(hemi, float(p.x_range.start), float(p.x_range.end))
-            except Exception as e:
-                print(f"[range_sink init error] {e}")
-
-    return layouts

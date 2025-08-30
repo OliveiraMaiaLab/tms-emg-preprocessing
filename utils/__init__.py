@@ -13,5 +13,4 @@ Modules:
 # Import from submodules directly where you use them, e.g.:
 #   from utils.persistence import create_or_update_session_file
 
-__all__ = ["persistence", "layout", "bokeh_embed"]
-__version__ = "0.1.0"
+__all__ = ["persistence", "layout", "bokeh_embed", "tms_module"]

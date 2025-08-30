@@ -12,4 +12,4 @@ Step handlers for the Streamlit app.
 # Import them directly where needed, e.g.:
 #   from steps.step_input import run_step as step_input
 
-__all__ = ["step_input", "step_confirmInputs", "step_segmentation"]
+__all__ = ["step_input", "step_confirmInputs", "step_segmentation", 'step_mepWindow']

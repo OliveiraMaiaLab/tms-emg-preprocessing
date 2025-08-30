@@ -1,4 +1,5 @@
 {
-  "template_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\experiment_template.json",
-  "input_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\example_data.bin"
+  "template_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\example_data\\experiment_template.json",
+  "input_file": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\example_data\\example_data.bin",
+  "output_dir": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\output"
 }
