@@ -12,7 +12,7 @@ from utils.persistence import (
     ensure_session_file,
     is_segmentation_complete,
 )
-from utils.bk_segmentation_embedding import start_bokeh_app
+from utils.bk_segmentation_embedding_rmp import start_bokeh_app
 from utils.layout import render_text, step_nav
 import json
 from pathlib import Path

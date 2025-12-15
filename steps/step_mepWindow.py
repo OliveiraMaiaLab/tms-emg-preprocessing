@@ -5,7 +5,6 @@ Step 4: Define window to compute MEP amplitude
 """
 import threading
 import streamlit as st
-import streamlit.components.v1 as components
 
 from utils.persistence import (
     ensure_metadata,
@@ -15,7 +14,7 @@ from utils.persistence import (
 from utils.layout import render_text, step_nav
 
 # Import the Bokeh server launcher
-from utils.bk_mepoverlap_embedding import start_bokeh_app
+from utils.bk_segmentation_embedding import start_bokeh_app
 
 
 def run_step(meta: dict):
@@ -48,7 +47,7 @@ def run_step(meta: dict):
         st.session_state["_ranges_store"] = {}
         st.session_state["_ranges_lock"] = threading.Lock()
 
-    # Restart Bokeh if context changes (prevents “stale plot” across subjects/sessions)
+    # Restart Bokeh if context changes (prevents stale plot across subjects/sessions)
     bokeh_key = (
         session_file,
         meta.get("input_file"),
@@ -66,11 +65,39 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-    # Embed the Bokeh app
-    components.iframe(
-        src=f"http://127.0.0.1:{st.session_state['_bokeh_port']}/bkapp",
-        height=540,
-        scrolling=True,
+    # Hide horizontal overflow globally + center responsive iframe for this step
+    st.markdown(
+        """
+        <style>
+        html, body, [data-testid="stAppViewContainer"] { overflow-x: hidden; }
+
+        .bk-iframe-wrap {
+            width: 100%;
+            display: flex;
+            justify-content: center;  /* center horizontally */
+            overflow-x: hidden;
+        }
+
+        .bk-iframe-wrap iframe {
+            display: block;
+            width: min(1200px, 100%); /* responsive width with a sensible max */
+            height: 560px;            /* adjust if you want more/less vertical space */
+            border: none;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    bokeh_url = f"http://localhost:{st.session_state['_bokeh_port']}/bkapp"
+
+    st.markdown(
+        f"""
+        <div class="bk-iframe-wrap">
+            <iframe src="{bokeh_url}" scrolling="no"></iframe>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     # Optional: show current selected window live (debug)
