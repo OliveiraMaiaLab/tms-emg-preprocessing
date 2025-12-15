@@ -7,4 +7,12 @@ This branch contains a **GUI-driven pipeline** for preprocessing **motor evoked 
 
 ---
 
+**Run**
+
+conda activate cfom_mep_preprocessing
+cd D:\FV\Projects\pdm_tms\jove_acquisition_preprocessing\tms-emg-preprocessing
+streamlit run main_gui.py
+
+---
+
 This GUI is intended to replace the older step-by-step guide. The previous implementation remains available in `old_pipeline/` on the `main` branch for reference.
