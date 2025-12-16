@@ -29,9 +29,9 @@ def run_step(meta: dict):
         disabled_next=True,
     )
 
-    st.title("MEP window")
+    # st.title("MEP window")
     render_text(
-        "MEP window",
+        "MEP window definition",
         font_color="black",
         font_weight="normal",
         horizontal_alignment="center",
@@ -66,50 +66,45 @@ def run_step(meta: dict):
         )
 
     # ---- Responsive, centered, LARGE iframe ----
-    ASPECT_W = 16
-    ASPECT_H = 9
+
 
     st.markdown(
-        f"""
+        """
         <style>
-        [data-testid="stAppViewBlockContainer"] {{
+        [data-testid="stAppViewBlockContainer"] {
             max-width: 100% !important;
             padding-left: 0rem !important;
             padding-right: 0rem !important;
-        }}
+        }
 
-        section.main > div {{
+        section.main > div {
             max-width: 100% !important;
             padding-left: 0rem !important;
             padding-right: 0rem !important;
-        }}
+        }
 
-        html, body, [data-testid="stAppViewContainer"] {{
+        html, body, [data-testid="stAppViewContainer"] {
             overflow-x: hidden;
-        }}
+        }
 
-        .bk-viewport-band {{
-            width: 100vw;
+        .bk-viewport-band {
+            width: 92vw;
             position: relative;
             left: 50%;
-            margin-left: -50vw;
+            margin-left: -46vw;
 
             display: flex;
             justify-content: center;
-            align-items: center;
-        }}
+        }
 
-        /* Height-driven sizing (fills vertical space), width computed from aspect ratio */
-        .bk-viewport-band iframe {{
+        .bk-viewport-band iframe {
             display: block;
             border: none;
 
-            height: 92vh;  /* <-- main knob: increase/decrease */
-
-            width: calc(92vh * ({ASPECT_W} / {ASPECT_H}));
-            max-width: 100vw;   /* don't overflow horizontally */
-            max-height: 92vh;   /* keep consistent */
-        }}
+            width: 92vw;
+            height: 46vw;     /* 2:1 ratio */
+            max-height: 65vh; /* keeps buttons visible */
+        }
         </style>
         """,
         unsafe_allow_html=True,
