@@ -12,9 +12,10 @@ from utils.persistence import (
     ensure_session_file,
     is_segmentation_complete,
 )
-from utils.bk_segmentation_embedding_rmp import start_bokeh_app
+from utils.bk_segmentation_embedding import start_bokeh_app
 from utils.layout import render_text, step_nav
 import json
+import numpy as np
 from pathlib import Path
 
 
@@ -66,6 +67,84 @@ def _is_segmentation_complete_flat(session_file: str, parts: list[str]) -> bool:
 
 NEXT_AFTER_SEGMENTATION = "mep_window"
 
+def compute_and_store_mep_epochs(
+    session_file: str,
+    meta: dict,
+    blocks: list[str],
+    pre_s: float = 0.100,
+    post_s: float = 0.400,
+):
+    """
+    Reads segmentation windows from session_file, derives MEP epochs,
+    and writes:
+        meps.<block>.left = [[beg,end], ...]
+    """
+    import numpy as np
+    from utils.tms_module import load_data
+
+    # --- load session json ---
+    with open(session_file, "r") as f:
+        js = json.load(f)
+
+    # --- choose input file (prefer meta; fallback to session json) ---
+    info = js.get("info") or {}
+    data_file = meta.get("input_file") or info.get("input_file")
+    if not data_file:
+        raise RuntimeError("No input_file found in meta or session_file['info'].")
+
+    # --- segmentation dict ---
+    seg = js.get("segmentation") or {}
+    if not isinstance(seg, dict):
+        raise RuntimeError("session_file['segmentation'] is not a dict.")
+
+    # --- ensure meps root is a dict ---
+    meps_root = js.get("meps")
+    if not isinstance(meps_root, dict):
+        meps_root = {}
+
+    # --- load raw data and pulses ---
+    fs = float(meta["sampling_rate"])
+    data, tms_indexes = load_data(data_file)
+    n_samples = int(data.shape[1])
+
+    tms_indexes = np.asarray(tms_indexes, dtype=int)
+    pulse_times_s = tms_indexes / fs
+    rec_end_s = n_samples / fs
+
+    # --- compute per block ---
+    for block in blocks:
+        seg_v = seg.get(block, [])
+
+        # if no segmentation range, store empty
+        if not (isinstance(seg_v, list) and seg_v and isinstance(seg_v[0], (list, tuple)) and len(seg_v[0]) >= 2):
+            meps_root.setdefault(block, {})
+            meps_root[block]["left"] = []
+            continue
+
+        seg_s, seg_e = map(float, seg_v[0])
+
+        epochs = []
+        for t0 in pulse_times_s:
+            if not (seg_s <= t0 <= seg_e):
+                continue
+
+            beg = float(t0 - pre_s)
+            end = float(t0 + post_s)
+
+            # skip epochs that would run outside recording
+            if beg < 0.0 or end > rec_end_s:
+                continue
+
+            epochs.append([beg, end])
+
+        meps_root.setdefault(block, {})
+        meps_root[block]["left"] = epochs
+
+    # --- write back ---
+    js["meps"] = meps_root
+    with open(session_file, "w") as f:
+        json.dump(js, f, indent=2)
+
 def run_step(meta: dict):
     meta = ensure_metadata()
     meta = ensure_template_loaded(meta)
@@ -76,16 +155,35 @@ def run_step(meta: dict):
         required_parts = list(meta.get("exp_structure", []))
         missing = _segmentation_missing_flat(session_file, required_parts)
 
-        if not missing:
-            if NEXT_AFTER_SEGMENTATION:
-                st.session_state.step = NEXT_AFTER_SEGMENTATION
-            else:
-                # show later in main render
-                st.session_state["_segmentation_note_no_next"] = True
-        else:
-            # mark for display in the main render (callbacks can't render UI)
+        if missing:
             st.session_state["_segmentation_incomplete"] = True
             st.session_state["_segmentation_missing"] = missing
+            return
+
+        # --- segmentation complete → derive epochs ---
+        mep_blocks = [
+            "bmeps",
+            "t0meps",
+            "t10meps",
+            "t20meps",
+            "t30meps",
+        ]
+        mep_blocks = [b for b in mep_blocks if b in required_parts]
+
+        try:
+            compute_and_store_mep_epochs(
+                session_file=session_file,
+                meta=meta,
+                blocks=mep_blocks,
+                pre_s=0.100,
+                post_s=0.400,
+            )
+        except Exception as e:
+            st.toast(f"Failed to compute MEP epochs: {e}", icon="❌")
+            return
+
+        # --- advance only if everything succeeded ---
+        st.session_state.step = NEXT_AFTER_SEGMENTATION
 
 
     step_nav(

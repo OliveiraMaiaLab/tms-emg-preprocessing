@@ -14,7 +14,7 @@ from utils.persistence import (
 from utils.layout import render_text, step_nav
 
 # Import the Bokeh server launcher
-from utils.bk_segmentation_embedding import start_bokeh_app
+from utils.bk_mepOverlap_embedding import start_bokeh_app
 
 
 def run_step(meta: dict):
@@ -26,7 +26,7 @@ def run_step(meta: dict):
         "mep_window",
         back_step="segmentation",
         next_step="Peak checking",
-        disabled_next=True,  # keep your current behavior for now
+        disabled_next=True,
     )
 
     st.title("MEP window")
@@ -47,7 +47,7 @@ def run_step(meta: dict):
         st.session_state["_ranges_store"] = {}
         st.session_state["_ranges_lock"] = threading.Lock()
 
-    # Restart Bokeh if context changes (prevents stale plot across subjects/sessions)
+    # Restart Bokeh if context changes
     bokeh_key = (
         session_file,
         meta.get("input_file"),
@@ -65,25 +65,51 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-    # Hide horizontal overflow globally + center responsive iframe for this step
+    # ---- Responsive, centered, LARGE iframe ----
+    ASPECT_W = 16
+    ASPECT_H = 9
+
     st.markdown(
-        """
+        f"""
         <style>
-        html, body, [data-testid="stAppViewContainer"] { overflow-x: hidden; }
+        [data-testid="stAppViewBlockContainer"] {{
+            max-width: 100% !important;
+            padding-left: 0rem !important;
+            padding-right: 0rem !important;
+        }}
 
-        .bk-iframe-wrap {
-            width: 100%;
-            display: flex;
-            justify-content: center;  /* center horizontally */
+        section.main > div {{
+            max-width: 100% !important;
+            padding-left: 0rem !important;
+            padding-right: 0rem !important;
+        }}
+
+        html, body, [data-testid="stAppViewContainer"] {{
             overflow-x: hidden;
-        }
+        }}
 
-        .bk-iframe-wrap iframe {
+        .bk-viewport-band {{
+            width: 100vw;
+            position: relative;
+            left: 50%;
+            margin-left: -50vw;
+
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }}
+
+        /* Height-driven sizing (fills vertical space), width computed from aspect ratio */
+        .bk-viewport-band iframe {{
             display: block;
-            width: min(1200px, 100%); /* responsive width with a sensible max */
-            height: 560px;            /* adjust if you want more/less vertical space */
             border: none;
-        }
+
+            height: 92vh;  /* <-- main knob: increase/decrease */
+
+            width: calc(92vh * ({ASPECT_W} / {ASPECT_H}));
+            max-width: 100vw;   /* don't overflow horizontally */
+            max-height: 92vh;   /* keep consistent */
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -93,14 +119,15 @@ def run_step(meta: dict):
 
     st.markdown(
         f"""
-        <div class="bk-iframe-wrap">
+        <div class="bk-viewport-band">
             <iframe src="{bokeh_url}" scrolling="no"></iframe>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Optional: show current selected window live (debug)
+    # Optional: live debug readout
     with st.session_state["_ranges_lock"]:
         epoch_window = st.session_state["_ranges_store"].get("epoch_window")
     st.caption(f"Current epoch window (s): {epoch_window}")
+
