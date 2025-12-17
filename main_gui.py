@@ -13,6 +13,8 @@ from steps.step_input import run_step as step_input
 from steps.step_confirmInputs import run_step as step_confirmInputs
 from steps.step_segmentation import run_step as step_segmentation
 from steps.step_mepWindow import run_step as step_mepWindow
+from steps.step_peakCheck import run_step as step_peakCheck
+
 
 st.set_page_config(layout="wide")
 
@@ -43,5 +45,6 @@ ROUTES = {
     "confirmInputs": step_confirmInputs,
     "segmentation": step_segmentation,
     "mep_window": step_mepWindow,
+    "peak_checking": step_peakCheck,
 }
 ROUTES.get(st.session_state.step, step_input)(meta)

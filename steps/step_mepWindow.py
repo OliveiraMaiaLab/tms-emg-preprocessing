@@ -5,6 +5,8 @@ Step 4: Define window to compute MEP amplitude
 """
 import threading
 import streamlit as st
+import json
+from pathlib import Path
 
 from utils.persistence import (
     ensure_metadata,
@@ -12,9 +14,30 @@ from utils.persistence import (
     ensure_session_file,
 )
 from utils.layout import render_text, step_nav
-
-# Import the Bokeh server launcher
 from utils.bk_mepOverlap_embedding import start_bokeh_app
+
+
+def save_mep_window_to_session(session_file: str, window_s: tuple[float, float]) -> None:
+    """
+    Persist the selected MEP window (relative to pulse, in seconds).
+
+    Writes:
+        meps.window = [beg, end]
+    """
+    beg, end = map(float, window_s)
+    if beg >= end:
+        raise ValueError(f"Invalid MEP window: {beg} >= {end}")
+
+    try:
+        js = json.loads(Path(session_file).read_text())
+    except Exception:
+        js = {}
+
+    meps = js.get("meps") or {}
+    meps["window"] = [beg, end]
+    js["meps"] = meps
+
+    Path(session_file).write_text(json.dumps(js, indent=2))
 
 
 def run_step(meta: dict):
@@ -22,14 +45,32 @@ def run_step(meta: dict):
     meta = ensure_template_loaded(meta)
     session_file = ensure_session_file(meta)
 
+    # --- Ephemeral runtime state (must exist BEFORE step_nav on_next runs)
+    if "_ranges_store" not in st.session_state:
+        st.session_state["_ranges_store"] = {}
+    if "_ranges_lock" not in st.session_state:
+        st.session_state["_ranges_lock"] = threading.Lock()
+
+    # on_next callback (save only; step_nav will navigate)
+    def _on_next():
+        with st.session_state["_ranges_lock"]:
+            win = st.session_state["_ranges_store"].get("epoch_window")
+
+        if not win:
+            st.toast("Select a window before advancing", icon="⚠️")
+            return False
+
+        save_mep_window_to_session(session_file, win)
+        return True
+
+
     step_nav(
         "mep_window",
         back_step="segmentation",
-        next_step="Peak checking",
-        disabled_next=True,
-    )
-
-    # st.title("MEP window")
+        next_step="peak_checking",
+        on_next=_on_next,
+        disabled_next=False,
+    )  
     render_text(
         "MEP window definition",
         font_color="black",
@@ -39,13 +80,6 @@ def run_step(meta: dict):
         nowrap=True,
         heading_level=1,
     )
-
-    # -------------------- BOKEH PLOT BELOW --------------------
-
-    # --- Ephemeral runtime state (shared with the Bokeh thread)
-    if "_ranges_store" not in st.session_state or "_ranges_lock" not in st.session_state:
-        st.session_state["_ranges_store"] = {}
-        st.session_state["_ranges_lock"] = threading.Lock()
 
     # Restart Bokeh if context changes
     bokeh_key = (
@@ -65,9 +99,7 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-    # ---- Responsive, centered, LARGE iframe ----
-
-
+    # --- iframe styling
     st.markdown(
         """
         <style>
@@ -111,7 +143,6 @@ def run_step(meta: dict):
     )
 
     bokeh_url = f"http://localhost:{st.session_state['_bokeh_port']}/bkapp"
-
     st.markdown(
         f"""
         <div class="bk-viewport-band">
@@ -121,8 +152,7 @@ def run_step(meta: dict):
         unsafe_allow_html=True,
     )
 
-    # Optional: live debug readout
+    # debug readout
     with st.session_state["_ranges_lock"]:
         epoch_window = st.session_state["_ranges_store"].get("epoch_window")
     st.caption(f"Current epoch window (s): {epoch_window}")
-

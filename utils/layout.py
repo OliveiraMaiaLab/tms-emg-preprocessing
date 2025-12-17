@@ -18,11 +18,14 @@ def step_nav(
     disabled_next: bool = False,
 ):
     """
-    Renders a top nav row:
-      - optional Back button on the left
-      - optional Advance button on the right
+    Back:
+      - run on_back() if provided, else go to back_step
+      - rerun
 
-    If on_next/on_back are provided, they run first; otherwise we set st.session_state.step.
+    Next:
+      - if on_next is provided, it should return True (proceed) or False (block)
+      - if proceed and next_step is provided, we go to next_step
+      - rerun only when we actually navigate
     """
     c_left, c_spacer, c_right = st.columns([1, 6, 1])
 
@@ -42,11 +45,17 @@ def step_nav(
             use_container_width=True,
             disabled=disabled_next,
         ):
+            proceed = True
+
             if on_next:
-                on_next()
-            elif next_step:
+                ret = on_next()
+                # Explicit False blocks advance
+                if ret is False:
+                    proceed = False
+
+            if proceed and next_step:
                 st.session_state.step = next_step
-            st.rerun()
+                st.rerun()
 
 def render_text(text, font_color="black", font_weight="normal",
                 horizontal_alignment="right", font_size=None, nowrap=True, heading_level=None):

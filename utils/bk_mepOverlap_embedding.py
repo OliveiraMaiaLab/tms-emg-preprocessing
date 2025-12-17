@@ -152,8 +152,19 @@ def _make_plot(t_sec: np.ndarray, trials: np.ndarray, range_sink=None):
         sizing_mode="stretch_both", # <-- important
     )
     p.title.align = "center"
+
+    # ----- TMS Pulse line -----
     p.add_layout(Span(location=0.0, dimension="height", line_color="black", line_width=1,
                               line_alpha=0.5, line_dash='dashed'))
+    # dummy line for legend
+    p.line(
+        [np.nan, np.nan], [np.nan, np.nan],  # no data
+        line_color="black",
+        line_width=1,
+        line_alpha=0.5,
+        line_dash="dashed",
+        legend_label="TMS pulse",
+    )
 
     # faded overlays
     for k in range(trials_mv.shape[0]):
@@ -162,7 +173,7 @@ def _make_plot(t_sec: np.ndarray, trials: np.ndarray, range_sink=None):
 
     # mean
     mean_src = ColumnDataSource(dict(x=t_ms, y=mean))
-    p.line("x", "y", source=mean_src, line_width=2, line_color= "black")
+    p.line("x", "y", source=mean_src, line_width=2, line_color= "black", legend_label="mean MEP")
 
     # RangeTool selection range (in ms on this axis)
     sel = Range1d(start=default_sel_ms[0], end=default_sel_ms[1])
