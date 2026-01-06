@@ -14,6 +14,7 @@ import threading
 import streamlit as st
 import json
 from pathlib import Path
+import numpy as np
 
 from utils.persistence import (
     ensure_metadata,

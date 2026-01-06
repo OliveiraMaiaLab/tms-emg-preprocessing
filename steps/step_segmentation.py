@@ -74,18 +74,14 @@ def compute_and_store_mep_pulses(
     blocks: list[str],
 ):
     """
-    Reads segmentation windows from session_file, derives pulses per block,
-    and writes into:
-
-      meps.<block>.<hemi>.pulses            : list[int] (sample indices)
-      meps.<block>.<hemi>.preactivation_flag: list[int] (0/1)
-      meps.<block>.<hemi>.min              : list[float|None]
-      meps.<block>.<hemi>.max              : list[float|None]
-      meps.<block>.<hemi>.peaks_flag       : list[int] (0/1)
+    Writes pulse indices (sample indices) into:
+      meps.<block>.<hemi>.pulses
+    and initializes parallel lists:
+      preactivation_flag, min, max, peaks_flag
     """
     import json
-    import numpy as np
     from pathlib import Path
+    import numpy as np
     from utils.tms_module import load_data
 
     js = json.loads(Path(session_file).read_text())
@@ -96,50 +92,50 @@ def compute_and_store_mep_pulses(
         raise RuntimeError("No input_file found in meta or session_file['info'].")
 
     fs = float(meta["sampling_rate"])
-    hemis = list(meta.get("hemispheres", info.get("hemispheres", ["left"])))
+
+    # IMPORTANT: use meta["channels"] so the sync pulse channel is correct
+    data, tms_indexes = load_data(data_file, channels=meta["channels"], fs=int(fs))
+    tms_indexes = np.asarray(tms_indexes, dtype=int)
+    print(meta)
+    print("Data:", len(tms_indexes))
+    print("Detected pulses:", len(tms_indexes))
+    pulse_times_s = tms_indexes / fs
 
     seg = js.get("segmentation") or {}
     if not isinstance(seg, dict):
         raise RuntimeError("session_file['segmentation'] is not a dict.")
 
-    # pulses for the *whole* file
-    _data, tms_indexes = load_data(data_file, channels=meta.get("channels"))
-    tms_indexes = np.asarray(tms_indexes, dtype=int)
-    pulse_times_s = tms_indexes / fs
+    hemis = list(meta.get("hemispheres", info.get("hemispheres", ["left"])))
 
     meps_root = js.get("meps")
     if not isinstance(meps_root, dict):
         meps_root = {}
 
-    def blank_payload(n: int):
-        return {
-            "pulses": [],
-            "preactivation_flag": [0] * n,
-            "min": [None] * n,
-            "max": [None] * n,
-            "peaks_flag": [0] * n,
-        }
-
     for block in blocks:
         seg_v = seg.get(block, [])
-        # if no segmentation range, write empty
         if not (isinstance(seg_v, list) and seg_v and isinstance(seg_v[0], (list, tuple)) and len(seg_v[0]) >= 2):
+            # ensure schema exists but empty
             meps_root.setdefault(block, {})
             for h in hemis:
-                meps_root[block][h] = blank_payload(0)
+                meps_root[block][h] = {
+                    "pulses": [],
+                    "preactivation_flag": [],
+                    "min": [],
+                    "max": [],
+                    "peaks_flag": [],
+                }
             continue
 
         seg_s, seg_e = map(float, seg_v[0])
 
         keep = (pulse_times_s >= seg_s) & (pulse_times_s <= seg_e)
-        pulses_in_block = tms_indexes[keep].astype(int).tolist()
-        n = len(pulses_in_block)
+        pulses = tms_indexes[keep].astype(int).tolist()
+        n = len(pulses)
 
         meps_root.setdefault(block, {})
         for h in hemis:
-            meps_root[block].setdefault(h, {})
             meps_root[block][h] = {
-                "pulses": pulses_in_block,
+                "pulses": pulses,
                 "preactivation_flag": [0] * n,
                 "min": [None] * n,
                 "max": [None] * n,
