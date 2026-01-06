@@ -16,3 +16,26 @@ streamlit run main_gui.py
 ---
 
 This GUI is intended to replace the older step-by-step guide. The previous implementation remains available in `old_pipeline/` on the `main` branch for reference.
+
+
+--- 
+
+Package organization
+
+__init__.py
+main_gui.py
+utils/
+├── persistence.py
+├── tms_module.py
+├── layout.py
+├── peak_checking_io
+├── mep_loading.py
+bk_embedding/
+├── segmentation.py
+├── mepOverlap.py
+steps/
+├── step_input.py
+├── step_confirmInputs.py  
+├── step_segmentation.py
+├── step_mepWindow.py 
+├── step_peakChecking.py

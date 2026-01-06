@@ -3,20 +3,32 @@ persistence.py
 --------------
 Centralized JSON I/O and app/state bootstrap helpers.
 
-- App defaults (.tms_emg_gui_settings.json)
-- Subject/session file scaffolding (sub-<id>_ses-<n>.json) saved under output_dir
-- Writing segmentation ranges from the Bokeh UI (FLAT schema)
-- Bootstrap guards to hydrate session state when jumping to later steps
+Session schema (relevant bits):
 
-FLAT segmentation schema:
-"segmentation": { "<block>": [[start, end]] | [] }
+{
+  "info": {...},
+  "segmentation": { "<block>": [[start_s, end_s]] | [] },
+  "mep_window": [beg_s, end_s],   # relative to pulse (seconds)
+  "meps": {
+    "<block>": {
+      "<hemi>": {
+        "pulses": [...],               # list[int] (sample indices)
+        "preactivation_flag": [...],   # list[int] 0/1
+        "min": [...],                  # list[float|None]
+        "max": [...],                  # list[float|None]
+        "peaks_flag": [...]            # list[int] 0/1
+      }
+    }
+  }
+}
 """
 from __future__ import annotations
+
 import os
 import json
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple, Any
 
 import numpy as np
 import streamlit as st
@@ -27,6 +39,7 @@ DEFAULT_TEMPLATE = str(RUN_DIR / "experiment_template.json")
 DEFAULT_INPUT = str(RUN_DIR / "example_data.bin")
 DEFAULT_OUTPUT = str(RUN_DIR)
 
+
 # ---------- low-level json helpers ----------
 def _json_read(path: Path, fallback: dict) -> dict:
     if not path.exists():
@@ -36,11 +49,13 @@ def _json_read(path: Path, fallback: dict) -> dict:
     except (JSONDecodeError, OSError, ValueError):
         return fallback
 
+
 def _json_write_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2))
     tmp.replace(path)
+
 
 # ---------- app-level defaults ----------
 def load_persisted_defaults():
@@ -62,6 +77,7 @@ def load_persisted_defaults():
         data.get("output_dir", DEFAULT_OUTPUT),
     )
 
+
 def save_persisted_defaults(template_path, input_path, output_dir):
     _json_write_atomic(
         SETTINGS_FILE,
@@ -72,13 +88,11 @@ def save_persisted_defaults(template_path, input_path, output_dir):
         },
     )
 
+
 # ---------- helpers for FLAT segmentation ----------
 def _normalize_flat_range(value):
     """
-    Normalize to [] or [[s, e]]:
-      []                      -> []
-      (s,e) / [s,e]           -> [[float(s), float(e)]]
-      [[s,e]] or [[s,e], ...] -> [[float(s), float(e)]] (first pair kept)
+    Normalize to [] or [[s, e]].
     """
     if value is None:
         return []
@@ -100,39 +114,63 @@ def _normalize_flat_range(value):
         return [[s, e]]
     return []
 
-def _first_pair_from_legacy_hemi_map(hemi_map: dict) -> list:
-    """
-    Legacy: hemi_map = {hemi: [[s,e]] | []} -> returns [[s,e]] from first hemi with data, else [].
-    """
-    if not isinstance(hemi_map, dict):
-        return []
-    for _h, rngs in hemi_map.items():
-        norm = _normalize_flat_range(rngs)
-        if norm:
-            return norm
-    return []
 
-def _migrate_segmentation_to_flat(seg: dict) -> dict:
-    if not isinstance(seg, dict):
-        return {}
-    out = {}
-    for part, val in seg.items():
-        if isinstance(val, list):   # already flat
-            out[part] = _normalize_flat_range(val)
-        elif isinstance(val, dict): # legacy per-hemi
-            out[part] = _first_pair_from_legacy_hemi_map(val)
-        else:
-            out[part] = []
-    return out
+def _blank_mep_hemi_payload() -> dict:
+    return {
+        "pulses": [],
+        "preactivation_flag": [],
+        "min": [],
+        "max": [],
+        "peaks_flag": [],
+    }
+
+
+def _ensure_meps_block_hemi(meps_root: dict, block: str, hemi: str) -> None:
+    meps_root.setdefault(block, {})
+    payload = meps_root[block].get(hemi)
+    if not isinstance(payload, dict):
+        payload = {}
+    # ensure keys exist
+    base = _blank_mep_hemi_payload()
+    for k, v in base.items():
+        payload.setdefault(k, v)
+
+    # normalize list types
+    for k in ("pulses", "preactivation_flag", "min", "max", "peaks_flag"):
+        if not isinstance(payload.get(k), list):
+            payload[k] = []
+
+    # if pulses exist, ensure same length for the parallel arrays
+    n = len(payload["pulses"])
+    def _fit_list(name: str, fill):
+        arr = payload[name]
+        if len(arr) < n:
+            arr.extend([fill] * (n - len(arr)))
+        elif len(arr) > n:
+            payload[name] = arr[:n]
+
+    _fit_list("preactivation_flag", 0)
+    _fit_list("peaks_flag", 0)
+    _fit_list("min", None)
+    _fit_list("max", None)
+
+    meps_root[block][hemi] = payload
+
 
 # ---------- subject/session file scaffolding ----------
 def _init_session_payload(meta, exp_structure: List[str]):
     hemis = list(meta.get("hemispheres", []))
-    meps_parts = [p for p in exp_structure if "meps" in p.lower()]
+    mep_blocks = [p for p in exp_structure if str(p).lower().endswith("meps")]
 
     segmentation = {part: [] for part in exp_structure}
     for key in ("mh", "mvic"):
         segmentation.setdefault(key, [])
+
+    meps_root = {}
+    for b in mep_blocks:
+        meps_root[b] = {}
+        for h in hemis:
+            meps_root[b][h] = _blank_mep_hemi_payload()
 
     return {
         "info": {
@@ -144,51 +182,49 @@ def _init_session_payload(meta, exp_structure: List[str]):
             "output_dir": str(meta.get("output_dir", DEFAULT_OUTPUT)),
         },
         "segmentation": segmentation,
-        # meps & mep_amplitudes remain hemi-nested
-        "meps": {part: {h: [] for h in hemis} for part in meps_parts},
-        "mep_amplitudes": {part: {h: [] for h in hemis} for part in meps_parts},
+        "mep_window": [None, None],  # relative to pulse in seconds
+        "meps": meps_root,
     }
+
 
 def _ensure_structure(data: dict, hemis: List[str], exp_structure: List[str]) -> dict:
     data.setdefault("info", {})
     data.setdefault("segmentation", {})
+    data.setdefault("mep_window", [None, None])
     data.setdefault("meps", {})
-    data.setdefault("mep_amplitudes", {})
 
-    # migrate segmentation if legacy
-    seg = data.get("segmentation", {})
-    if isinstance(seg, dict) and any(isinstance(v, dict) for v in seg.values()):
-        seg = _migrate_segmentation_to_flat(seg)
-    elif not isinstance(seg, dict):
+    # segmentation keys
+    seg = data.get("segmentation")
+    if not isinstance(seg, dict):
         seg = {}
-
     for part in exp_structure:
         seg.setdefault(part, [])
     for key in ("mh", "mvic"):
         seg.setdefault(key, [])
+    # normalize values
+    for part in list(seg.keys()):
+        seg[part] = _normalize_flat_range(seg.get(part))
     data["segmentation"] = seg
 
-    meps_parts = [p for p in exp_structure if "meps" in p.lower()]
-    for part in meps_parts:
-        data["meps"].setdefault(part, {})
-        data["mep_amplitudes"].setdefault(part, {})
+    # meps keys
+    meps_root = data.get("meps")
+    if not isinstance(meps_root, dict):
+        meps_root = {}
+    mep_blocks = [p for p in exp_structure if str(p).lower().endswith("meps")]
+    for b in mep_blocks:
         for h in hemis:
-            data["meps"][part].setdefault(h, [])
-            data["mep_amplitudes"][part].setdefault(h, [])
+            _ensure_meps_block_hemi(meps_root, b, h)
+    data["meps"] = meps_root
 
-    # ensure info.output_dir
+    # info.output_dir
     info = data.setdefault("info", {})
     info.setdefault("output_dir", info.get("output_dir", DEFAULT_OUTPUT))
     data["info"] = info
 
     return data
 
+
 def ensure_output_dir(path: str, show_toast: bool = True) -> str:
-    """
-    Ensure the output directory exists. Creates it if missing.
-    Shows a short-lived toast when created (if show_toast=True).
-    Returns the absolute path as a string.
-    """
     if not path:
         raise ValueError("Output directory path is empty.")
 
@@ -197,7 +233,6 @@ def ensure_output_dir(path: str, show_toast: bool = True) -> str:
     try:
         p.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        # Bubble up after surfacing the error in the UI
         try:
             st.error(f"Could not create output folder: {e}")
         except Exception:
@@ -205,20 +240,15 @@ def ensure_output_dir(path: str, show_toast: bool = True) -> str:
         raise
 
     if show_toast and not existed:
-        # Streamlit toasts auto-dismiss after a short while
         try:
             st.toast(f"Created output folder at: {p}", icon="📁")
         except Exception:
-            # Fallback (non-ephemeral) if toast unavailable
             st.success(f"Created output folder at: {p}")
 
     return str(p)
 
+
 def create_or_update_session_file(meta, exp_structure: List[str]) -> str:
-    """
-    Create/update session JSON at: <output_dir>/sub-<id>_ses-<n>.json
-    Also writes info.output_dir in the file.
-    """
     outdir = Path(meta.get("output_dir") or DEFAULT_OUTPUT)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -229,14 +259,16 @@ def create_or_update_session_file(meta, exp_structure: List[str]) -> str:
     if fpath.exists():
         data = _json_read(fpath, {})
         data.setdefault("info", {})
-        data["info"].update({
-            "template_file": meta["template_file"],
-            "input_file": meta["input_file"],
-            "sampling_rate": meta["sampling_rate"],
-            "session": meta["session"],
-            "hemispheres": hemis,
-            "output_dir": str(outdir),
-        })
+        data["info"].update(
+            {
+                "template_file": meta["template_file"],
+                "input_file": meta["input_file"],
+                "sampling_rate": meta["sampling_rate"],
+                "session": meta["session"],
+                "hemispheres": hemis,
+                "output_dir": str(outdir),
+            }
+        )
         data = _ensure_structure(data, hemis, exp_structure)
     else:
         data = _init_session_payload(meta, exp_structure)
@@ -244,16 +276,14 @@ def create_or_update_session_file(meta, exp_structure: List[str]) -> str:
     _json_write_atomic(fpath, data)
     return str(fpath)
 
+
 # ---------- write segmentation from Bokeh UI (FLAT) ----------
-def write_segmentation_ranges(session_file: str,
-                              block_ranges: Dict[str, object],
-                              hemis: List[str] | None,
-                              exp_structure: List[str]) -> str:
-    """
-    Overwrite only provided fields for FLAT schema:
-      segmentation[part] = []       # clear
-      segmentation[part] = [[s,e]]  # set one range
-    """
+def write_segmentation_ranges(
+    session_file: str,
+    block_ranges: Dict[str, object],
+    hemis: List[str] | None,
+    exp_structure: List[str],
+) -> str:
     fpath = Path(session_file)
     data = _json_read(fpath, {})
     hemis_list = list(hemis or data.get("info", {}).get("hemispheres", []))
@@ -272,9 +302,9 @@ def write_segmentation_ranges(session_file: str,
     _json_write_atomic(fpath, data)
     return str(fpath)
 
+
 # ---------- bootstrap guards ----------
 def ensure_metadata() -> dict:
-    """Ensure st.session_state.metadata exists and is populated with sane defaults."""
     if "metadata" not in st.session_state:
         tdef, idef, odef = load_persisted_defaults()
         st.session_state.metadata = {
@@ -288,13 +318,14 @@ def ensure_metadata() -> dict:
             "_script_dir": os.getcwd(),
         }
     meta = st.session_state.metadata
-    # fill gaps (handles partial/legacy sessions)
+
     if not meta.get("template_file"):
         meta["template_file"] = load_persisted_defaults()[0]
     if not meta.get("input_file"):
         meta["input_file"] = load_persisted_defaults()[1]
     if not meta.get("output_dir"):
         meta["output_dir"] = load_persisted_defaults()[2]
+
     meta.setdefault("sampling_rate", 4000)
     meta.setdefault("subj_id", "example_sub")
     meta.setdefault("session", 1)
@@ -302,8 +333,8 @@ def ensure_metadata() -> dict:
     meta.setdefault("_script_dir", os.getcwd())
     return meta
 
+
 def ensure_template_loaded(meta: dict) -> dict:
-    """Load experiment template -> exp_name, channels, exp_structure."""
     need = any(k not in meta for k in ("exp_name", "channels", "exp_structure"))
     if not need and isinstance(meta.get("channels"), np.ndarray):
         return meta
@@ -323,16 +354,18 @@ def ensure_template_loaded(meta: dict) -> dict:
         template = json.load(f)
 
     meta["exp_name"] = template["experiment_name"]
-    meta["channels"] = np.array([
-        template["channels"]["synch_pulse"],
-        template["channels"]["right"],
-        template["channels"]["left"],
-    ])
+    meta["channels"] = np.array(
+        [
+            template["channels"]["synch_pulse"],
+            template["channels"]["right"],
+            template["channels"]["left"],
+        ]
+    )
     meta["exp_structure"] = template["experiment_structure"]
     return meta
 
+
 def ensure_session_file(meta: dict) -> str:
-    """Ensure sub-<id>_ses-<n>.json exists under output_dir and record its path."""
     if "_session_file" in st.session_state and st.session_state["_session_file"]:
         return st.session_state["_session_file"]
     if "exp_structure" not in meta:
@@ -341,14 +374,8 @@ def ensure_session_file(meta: dict) -> str:
     st.session_state["_session_file"] = path
     return path
 
-def is_segmentation_complete(session_file: str,
-                             hemis: list[str],  # kept for compatibility, unused
-                             exp_structure: list[str]) -> bool:
-    """
-    FLAT schema completion check:
-    True if segmentation[part] has at least one valid [start, end] pair
-    for every part in exp_structure (plus 'mh' and 'mvic').
-    """
+
+def is_segmentation_complete(session_file: str, hemis: list[str], exp_structure: list[str]) -> bool:
     try:
         data = json.loads(Path(session_file).read_text())
     except Exception:
@@ -369,8 +396,4 @@ def is_segmentation_complete(session_file: str,
             return False
         return s < e
 
-    for part in parts_to_check:
-        if not _valid_flat(seg.get(part, [])):
-            return False
-
-    return True
+    return all(_valid_flat(seg.get(part, [])) for part in parts_to_check)

@@ -1,6 +1,7 @@
 """
-step_segmentation.py
+steps/step_segmentation.py
 --------------------
+Step 3: EMG segmentaion 
 Embeds the Bokeh viewer and writes selected ranges into the subject/session JSON.
 Defensive: hydrates missing state so deep-linking works.
 """
@@ -12,7 +13,7 @@ from utils.persistence import (
     ensure_session_file,
     is_segmentation_complete,
 )
-from utils.bk_segmentation_embedding import start_bokeh_app
+from bk_embedding.segmentation import start_bokeh_app
 from utils.layout import render_text, step_nav
 import json
 import numpy as np
@@ -67,83 +68,87 @@ def _is_segmentation_complete_flat(session_file: str, parts: list[str]) -> bool:
 
 NEXT_AFTER_SEGMENTATION = "mep_window"
 
-def compute_and_store_mep_epochs(
+def compute_and_store_mep_pulses(
     session_file: str,
     meta: dict,
     blocks: list[str],
-    pre_s: float = 0.100,
-    post_s: float = 0.400,
 ):
     """
-    Reads segmentation windows from session_file, derives MEP epochs,
-    and writes:
-        meps.<block>.left = [[beg,end], ...]
+    Reads segmentation windows from session_file, derives pulses per block,
+    and writes into:
+
+      meps.<block>.<hemi>.pulses            : list[int] (sample indices)
+      meps.<block>.<hemi>.preactivation_flag: list[int] (0/1)
+      meps.<block>.<hemi>.min              : list[float|None]
+      meps.<block>.<hemi>.max              : list[float|None]
+      meps.<block>.<hemi>.peaks_flag       : list[int] (0/1)
     """
+    import json
     import numpy as np
+    from pathlib import Path
     from utils.tms_module import load_data
 
-    # --- load session json ---
-    with open(session_file, "r") as f:
-        js = json.load(f)
-
-    # --- choose input file (prefer meta; fallback to session json) ---
+    js = json.loads(Path(session_file).read_text())
     info = js.get("info") or {}
+
     data_file = meta.get("input_file") or info.get("input_file")
     if not data_file:
         raise RuntimeError("No input_file found in meta or session_file['info'].")
 
-    # --- segmentation dict ---
+    fs = float(meta["sampling_rate"])
+    hemis = list(meta.get("hemispheres", info.get("hemispheres", ["left"])))
+
     seg = js.get("segmentation") or {}
     if not isinstance(seg, dict):
         raise RuntimeError("session_file['segmentation'] is not a dict.")
 
-    # --- ensure meps root is a dict ---
+    # pulses for the *whole* file
+    _data, tms_indexes = load_data(data_file, channels=meta.get("channels"))
+    tms_indexes = np.asarray(tms_indexes, dtype=int)
+    pulse_times_s = tms_indexes / fs
+
     meps_root = js.get("meps")
     if not isinstance(meps_root, dict):
         meps_root = {}
 
-    # --- load raw data and pulses ---
-    fs = float(meta["sampling_rate"])
-    data, tms_indexes = load_data(data_file)
-    n_samples = int(data.shape[1])
+    def blank_payload(n: int):
+        return {
+            "pulses": [],
+            "preactivation_flag": [0] * n,
+            "min": [None] * n,
+            "max": [None] * n,
+            "peaks_flag": [0] * n,
+        }
 
-    tms_indexes = np.asarray(tms_indexes, dtype=int)
-    pulse_times_s = tms_indexes / fs
-    rec_end_s = n_samples / fs
-
-    # --- compute per block ---
     for block in blocks:
         seg_v = seg.get(block, [])
-
-        # if no segmentation range, store empty
+        # if no segmentation range, write empty
         if not (isinstance(seg_v, list) and seg_v and isinstance(seg_v[0], (list, tuple)) and len(seg_v[0]) >= 2):
             meps_root.setdefault(block, {})
-            meps_root[block]["left"] = []
+            for h in hemis:
+                meps_root[block][h] = blank_payload(0)
             continue
 
         seg_s, seg_e = map(float, seg_v[0])
 
-        epochs = []
-        for t0 in pulse_times_s:
-            if not (seg_s <= t0 <= seg_e):
-                continue
-
-            beg = float(t0 - pre_s)
-            end = float(t0 + post_s)
-
-            # skip epochs that would run outside recording
-            if beg < 0.0 or end > rec_end_s:
-                continue
-
-            epochs.append([beg, end])
+        keep = (pulse_times_s >= seg_s) & (pulse_times_s <= seg_e)
+        pulses_in_block = tms_indexes[keep].astype(int).tolist()
+        n = len(pulses_in_block)
 
         meps_root.setdefault(block, {})
-        meps_root[block]["left"] = epochs
+        for h in hemis:
+            meps_root[block].setdefault(h, {})
+            meps_root[block][h] = {
+                "pulses": pulses_in_block,
+                "preactivation_flag": [0] * n,
+                "min": [None] * n,
+                "max": [None] * n,
+                "peaks_flag": [0] * n,
+            }
 
-    # --- write back ---
     js["meps"] = meps_root
-    with open(session_file, "w") as f:
-        json.dump(js, f, indent=2)
+    Path(session_file).write_text(json.dumps(js, indent=2))
+
 
 def run_step(meta: dict):
     meta = ensure_metadata()
@@ -171,12 +176,10 @@ def run_step(meta: dict):
         mep_blocks = [b for b in mep_blocks if b in required_parts]
 
         try:
-            compute_and_store_mep_epochs(
+            compute_and_store_mep_pulses(
                 session_file=session_file,
                 meta=meta,
                 blocks=mep_blocks,
-                pre_s=0.100,
-                post_s=0.400,
             )
         except Exception as e:
             st.toast(f"Failed to compute MEP epochs: {e}", icon="❌")

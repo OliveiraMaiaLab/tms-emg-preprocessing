@@ -1,5 +1,5 @@
 """
-step_input.py
+steps/step_input.py
 -------------
 Step 1: Collect paths and general metadata. Validates inputs and saves
 last-used paths to settings.

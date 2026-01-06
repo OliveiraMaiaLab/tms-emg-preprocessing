@@ -1,5 +1,5 @@
 """
-step_confirm.py
+steps/step_confirmInputs.py
 ---------------
 Step 2: Show a summary; on confirm, create/update the subject/session JSON.
 """
