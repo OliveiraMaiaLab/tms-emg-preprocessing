@@ -49,9 +49,8 @@ def step_nav(
 
             if on_next:
                 ret = on_next()
-                # Explicit False blocks advance
-                if ret is False:
-                    proceed = False
+                # Only an explicit True proceeds; None/False blocks (safer default)
+                proceed = (ret is True)
 
             if proceed and next_step:
                 st.session_state.step = next_step

@@ -3,6 +3,8 @@
 """
 Utility functions for EMG data processing, peak detection, filtering, and preprocessing.
 """
+from __future__ import annotations
+
 # --- Core scientific stack ---
 import numpy as np
 import pandas as pd
@@ -12,6 +14,14 @@ import matplotlib.pyplot as plt
 from skimage.restoration import denoise_wavelet
 from scipy.signal import find_peaks, savgol_filter, detrend
 from math import isnan
+
+
+from typing import Tuple, List
+from pathlib import Path
+import json
+
+from dataclasses import dataclass
+
 
 # ------------------------------
 # Time & Conversion Functions
@@ -241,11 +251,137 @@ def load_data(file_dir, channels=np.array((3,1,2)), fs=4000,
 
     return data, tms_indexes
 
+def load_meps_for_block(
+    meta: dict,
+    session_file: str | Path,
+    block_name: str,
+    hemi: str = "left",
+    pre_s: float = 0.100,
+    post_s: float = 0.400,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    --------------------
+    Extract per-block MEP waveforms from raw EMG using pulse indices stored in session JSON.
+
+    Returns:
+    - t_ms: (T,) time axis in milliseconds (relative to pulse)
+    - meps: (N, T) waveforms (baseline-corrected, in uV)
+    """
+    session_file = Path(session_file)
+
+    js = json.loads(session_file.read_text())
+    meps_root = js.get("meps", {}) or {}
+    hp = ((meps_root.get(block_name) or {}).get(hemi) or {})
+    pulses = hp.get("pulses", [])
+    if not isinstance(pulses, list) or not pulses:
+        return np.asarray([], dtype=float), np.zeros((0, 0), dtype=float)
+
+    fs = float(meta["sampling_rate"])
+    data, _tms = load_data(meta["input_file"], channels=meta.get("channels"))
+
+    hemi_to_ch = {"left": 0, "right": 1}
+    ch = hemi_to_ch.get(hemi, 0)
+    sig = data[ch, :]
+
+    pre_n = int(round(pre_s * fs))
+    post_n = int(round(post_s * fs))
+    n_win = pre_n + post_n
+
+    t_ms = (np.arange(n_win) - pre_n) / fs * 1000.0
+
+    trials = []
+    for p in pulses:
+        p = int(p)
+        a = p - pre_n
+        b = p + post_n
+        if a < 0 or b > sig.shape[0]:
+            continue
+        y = sig[a:b].astype(float)
+        y -= float(y[:pre_n].mean())  # baseline correct
+        trials.append(y)
+
+    if not trials:
+        return t_ms, np.zeros((0, n_win), dtype=float)
+
+    meps = np.asarray(trials, dtype=float)
+    return t_ms, meps
+
+
 def get_info(path):
     fname = path.split('/')[-1]
     temp = fname.split('.')[0].split('_')
     subject, session, hemi = temp[:3]
     date = temp[3] + ' at ' + temp[4]
     return subject, session, hemi, date
+
+# ------------------------------
+# Helpers for reading/writing peaks_flag and reading the MEP window.
+# ------------------------------
+
+@dataclass(frozen=True)
+class Epoch:
+    """Epoch bounds in milliseconds (relative to pulse)."""
+    tmin_ms: float
+    tmax_ms: float
+
+
+def read_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json(path: Path, data: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(path)
+
+
+def get_epoch_from_session(session: dict) -> Epoch:
+    """
+    Reads epoch bounds from:
+      session["mep_window"] = [beg_s, end_s]   (seconds, relative to pulse)
+    Returns in milliseconds.
+    """
+    w = session.get("mep_window", None)
+    if not (isinstance(w, list) and len(w) == 2 and w[0] is not None and w[1] is not None):
+        raise KeyError(
+            "Missing MEP window definition in session JSON. "
+            "Expected session['mep_window'] = [beg_s, end_s]."
+        )
+    beg_s = float(w[0])
+    end_s = float(w[1])
+    return Epoch(beg_s * 1000.0, end_s * 1000.0)
+
+
+def get_peaks_flag_list(session: dict, block: str, hemi: str = "left") -> List[int]:
+    meps = session.get("meps", {}) or {}
+    hp = ((meps.get(block) or {}).get(hemi) or {})
+    flags = hp.get("peaks_flag", [])
+    if not isinstance(flags, list):
+        return []
+    out = []
+    for v in flags:
+        try:
+            out.append(1 if int(v) else 0)
+        except Exception:
+            out.append(0)
+    return out
+
+
+def set_peaks_flag_list(session: dict, block: str, flags: List[int], hemi: str = "left") -> None:
+    session.setdefault("meps", {})
+    session["meps"].setdefault(block, {})
+    session["meps"][block].setdefault(hemi, {})
+    hp = session["meps"][block][hemi]
+    hp["peaks_flag"] = [1 if int(v) else 0 for v in flags]
+    session["meps"][block][hemi] = hp
+
+
+def save_peaks_flag_list(session_file: Path, block: str, flags: List[int], hemi: str = "left") -> None:
+    session = read_json(session_file)
+    set_peaks_flag_list(session, block, flags, hemi=hemi)
+    write_json(session_file, session)
+
     
 

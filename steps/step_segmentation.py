@@ -1,31 +1,38 @@
 """
 steps/step_segmentation.py
 --------------------
-Step 3: EMG segmentaion 
+Step 3: EMG segmentation
 Embeds the Bokeh viewer and writes selected ranges into the subject/session JSON.
 Defensive: hydrates missing state so deep-linking works.
 """
+from __future__ import annotations
+
 import threading
+import json
+from pathlib import Path
+
+import numpy as np
 import streamlit as st
+
 from utils.persistence import (
     ensure_metadata,
     ensure_template_loaded,
     ensure_session_file,
-    is_segmentation_complete,
 )
 from bk_embedding.segmentation import start_bokeh_app
 from utils.layout import render_text, step_nav
-import json
-import numpy as np
-from pathlib import Path
+
+
+NEXT_AFTER_SEGMENTATION = "mep_window"
 
 
 def _segmentation_missing_flat(session_file: str, parts: list[str]) -> list[str]:
-    """Return the list of parts that do NOT have a valid first [start, end] in the flat schema."""
+    """Return list of parts that do NOT have a valid first [start, end] in the flat schema."""
     try:
         data = json.loads(Path(session_file).read_text())
     except Exception:
-        return parts[:]  # if file can't be read, treat all as missing
+        return parts[:]
+
     seg = data.get("segmentation", {}) or {}
 
     def ok(v):
@@ -43,30 +50,90 @@ def _segmentation_missing_flat(session_file: str, parts: list[str]) -> list[str]
     return [p for p in parts if not ok(seg.get(p, []))]
 
 
-def _is_segmentation_complete_flat(session_file: str, parts: list[str]) -> bool:
-    """Return True if every part in `parts` has a valid first [start, end] in the flat schema."""
+def _hemi_to_data_index(hemi: str) -> int:
+    """
+    load_data() returns data as [left, right].
+    """
+    h = str(hemi).strip().lower()
+    if h == "right":
+        return 1
+    return 0  # default left
+
+
+def _compute_rest_ref_from_emg_ref(seg: dict, emg: np.ndarray, fs: float) -> float | None:
+    """
+    If segmentation has 'emg_ref': [[start_s, end_s]], compute:
+      rest_ref = std(abs(emg[first 0.05s of that segment]))
+    Returns None if emg_ref is missing/invalid.
+    """
+    v = seg.get("emg_ref", [])
+    if not (isinstance(v, list) and v and isinstance(v[0], (list, tuple)) and len(v[0]) >= 2):
+        return None
+
     try:
-        data = json.loads(Path(session_file).read_text())
+        start_s = float(v[0][0])
     except Exception:
-        return False
-    seg = data.get("segmentation", {}) or {}
+        return None
 
-    def ok(v):
-        if not (isinstance(v, list) and v):
-            return False
-        first = v[0]
-        if not (isinstance(first, (list, tuple)) and len(first) >= 2):
-            return False
-        try:
-            s, e = float(first[0]), float(first[1])
-        except (TypeError, ValueError):
-            return False
-        return s < e
+    # Only take first 0.05s from emg_ref start
+    t_interval = 0.05
+    a = int(round(start_s * fs))
+    b = int(round((start_s + t_interval) * fs))
 
-    return all(ok(seg.get(p, [])) for p in parts)
+    a = max(0, min(a, emg.size))
+    b = max(0, min(b, emg.size))
+
+    if b <= a:
+        return None
+
+    return float(np.std(np.abs(emg[a:b])))
 
 
-NEXT_AFTER_SEGMENTATION = "mep_window"
+def _std_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, rest_ref: float, fs: float = 4000.0) -> int:
+    """
+    Fills std_preactivation_flag.
+    Uses 0.05s window ending 5 samples before pulse:
+      samples = [pulse-5-0.05*fs, pulse-5)
+      pre_pulse = std(abs(emg[samples]))
+      return 2 if pre_pulse > rest_ref else 0
+    """
+    t_interval = 0.05
+    end = int(pulse_idx - 5)
+    beg = int(end - t_interval * fs)
+
+    if end <= 0:
+        return 0
+    beg = max(0, beg)
+    end = min(emg.size, end)
+    if end <= beg:
+        return 0
+
+    pre_pulse = float(np.std(np.abs(emg[beg:end])))
+    return 1 if pre_pulse > rest_ref else 0
+
+
+def _hinder_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, fs: float = 4000.0) -> int:
+    """
+    Fills hinder_preactivation_flag.
+    Same window:
+      rest_ref = 15
+      return 3 if std(abs(pre)) > rest_ref else 0
+    """
+    rest_ref = 15
+    t_interval = 0.05
+    end = int(pulse_idx - 5)
+    beg = int(end - t_interval * fs)
+
+    if end <= 0:
+        return 0
+    beg = max(0, beg)
+    end = min(emg.size, end)
+    if end <= beg:
+        return 0
+
+    pre_pulse = float(np.std(np.abs(emg[beg:end])))
+    return 1 if pre_pulse > rest_ref else 0
+
 
 def compute_and_store_mep_pulses(
     session_file: str,
@@ -76,12 +143,11 @@ def compute_and_store_mep_pulses(
     """
     Writes pulse indices (sample indices) into:
       meps.<block>.<hemi>.pulses
-    and initializes parallel lists:
-      preactivation_flag, min, max, peaks_flag
+    and initializes/fills parallel lists:
+      min, max, hinder_preactivation_flag, std_preactivation_flag, peaks_flag
+
+    NOTE: min/max stay None here (computed later in MEP window / overlap step).
     """
-    import json
-    from pathlib import Path
-    import numpy as np
     from utils.tms_module import load_data
 
     js = json.loads(Path(session_file).read_text())
@@ -96,9 +162,6 @@ def compute_and_store_mep_pulses(
     # IMPORTANT: use meta["channels"] so the sync pulse channel is correct
     data, tms_indexes = load_data(data_file, channels=meta["channels"], fs=int(fs))
     tms_indexes = np.asarray(tms_indexes, dtype=int)
-    print(meta)
-    print("Data:", len(tms_indexes))
-    print("Detected pulses:", len(tms_indexes))
     pulse_times_s = tms_indexes / fs
 
     seg = js.get("segmentation") or {}
@@ -111,17 +174,29 @@ def compute_and_store_mep_pulses(
     if not isinstance(meps_root, dict):
         meps_root = {}
 
+    # Precompute rest_ref per hemi if emg_ref exists
+    rest_ref_by_hemi: dict[str, float | None] = {}
+    for h in hemis:
+        emg = np.asarray(data[_hemi_to_data_index(h)], dtype=float)
+        rest_ref_by_hemi[h] = _compute_rest_ref_from_emg_ref(seg, emg, fs)
+
     for block in blocks:
         seg_v = seg.get(block, [])
-        if not (isinstance(seg_v, list) and seg_v and isinstance(seg_v[0], (list, tuple)) and len(seg_v[0]) >= 2):
+        if not (
+            isinstance(seg_v, list)
+            and seg_v
+            and isinstance(seg_v[0], (list, tuple))
+            and len(seg_v[0]) >= 2
+        ):
             # ensure schema exists but empty
             meps_root.setdefault(block, {})
             for h in hemis:
                 meps_root[block][h] = {
                     "pulses": [],
-                    "preactivation_flag": [],
                     "min": [],
                     "max": [],
+                    "hinder_preactivation_flag": [],
+                    "std_preactivation_flag": [],
                     "peaks_flag": [],
                 }
             continue
@@ -134,11 +209,24 @@ def compute_and_store_mep_pulses(
 
         meps_root.setdefault(block, {})
         for h in hemis:
+            emg = np.asarray(data[_hemi_to_data_index(h)], dtype=float)
+
+            # Flags
+            hinder_flags = [_hinder_muscle_activity_flag(p, emg, fs=fs) for p in pulses]
+
+            rr = rest_ref_by_hemi.get(h)
+            if rr is None:
+                # If no emg_ref, keep std flag at 0 (no decision)
+                std_flags = [0] * n
+            else:
+                std_flags = [_std_muscle_activity_flag(p, emg, rr, fs=fs) for p in pulses]
+
             meps_root[block][h] = {
                 "pulses": pulses,
-                "preactivation_flag": [0] * n,
                 "min": [None] * n,
                 "max": [None] * n,
+                "hinder_preactivation_flag": hinder_flags,
+                "std_preactivation_flag": std_flags,
                 "peaks_flag": [0] * n,
             }
 
@@ -151,24 +239,24 @@ def run_step(meta: dict):
     meta = ensure_template_loaded(meta)
     session_file = ensure_session_file(meta)
 
-    # --- Nav bar with Back and smart Advance
-    def _try_advance():
-        required_parts = list(meta.get("exp_structure", []))
-        missing = _segmentation_missing_flat(session_file, required_parts)
+    # --- Ephemeral runtime state (used by embedded Bokeh)
+    if "_ranges_store" not in st.session_state:
+        st.session_state["_ranges_store"] = {}
+    if "_ranges_lock" not in st.session_state:
+        st.session_state["_ranges_lock"] = threading.Lock()
 
+    def _try_advance() -> bool:
+        # REQUIRED segmentation blocks come from template-derived exp_structure.
+        required_parts = list(meta.get("exp_structure", []))
+
+        missing = _segmentation_missing_flat(session_file, required_parts)
         if missing:
             st.session_state["_segmentation_incomplete"] = True
             st.session_state["_segmentation_missing"] = missing
-            return
+            return False
 
-        # --- segmentation complete → derive epochs ---
-        mep_blocks = [
-            "bmeps",
-            "t0meps",
-            "t10meps",
-            "t20meps",
-            "t30meps",
-        ]
+        # segmentation complete → compute pulses for MEP blocks
+        mep_blocks = ["bmeps", "t0meps", "t10meps", "t20meps", "t30meps"]
         mep_blocks = [b for b in mep_blocks if b in required_parts]
 
         try:
@@ -178,13 +266,12 @@ def run_step(meta: dict):
                 blocks=mep_blocks,
             )
         except Exception as e:
-            st.toast(f"Failed to compute MEP epochs: {e}", icon="❌")
-            return
+            st.toast(f"Failed to compute/store MEP pulses: {e}", icon="❌")
+            return False
 
-        # --- advance only if everything succeeded ---
-        st.session_state.step = NEXT_AFTER_SEGMENTATION
+        return True
 
-
+    # Nav bar
     step_nav(
         "segmentation",
         back_step="confirm",
@@ -204,19 +291,16 @@ def run_step(meta: dict):
         except Exception:
             st.warning(msg)
 
-    if st.session_state.pop("_segmentation_note_no_next", False):
-        try:
-            st.toast("Segmentation complete — no next step configured.", icon="ℹ️")
-        except Exception:
-            st.info("Segmentation complete — no next step configured.")
-
-    # --- Ephemeral runtime state
-    if "_ranges_store" not in st.session_state:
-        st.session_state["_ranges_store"] = {}
-    if "_ranges_lock" not in st.session_state:
-        st.session_state["_ranges_lock"] = threading.Lock()
-
-    if "_bokeh_port" not in st.session_state:
+    # (Re)start Bokeh server if context changes (prevents stale ports)
+    bokeh_key = (
+        session_file,
+        meta.get("input_file"),
+        meta.get("template_file"),
+        tuple(meta.get("hemispheres", [])),
+        tuple(meta.get("exp_structure", [])),
+    )
+    if st.session_state.get("_bokeh_key") != bokeh_key:
+        st.session_state["_bokeh_key"] = bokeh_key
         st.session_state["_bokeh_port"] = start_bokeh_app(
             meta=meta,
             session_file=session_file,
@@ -226,18 +310,27 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-
-    render_text('EMG Segmentation', font_color="black", font_weight="bold",
-                horizontal_alignment="center", font_size=None, nowrap=True, heading_level=1)
+    render_text(
+        "EMG Segmentation",
+        font_color="black",
+        font_weight="bold",
+        horizontal_alignment="center",
+        font_size=None,
+        nowrap=True,
+        heading_level=1,
+    )
 
     # Hide horizontal overflow globally + in the iframe wrapper
-    st.markdown("""
-    <style>
-    html, body, [data-testid="stAppViewContainer"] { overflow-x: hidden; }
-    .bk-iframe-wrap { width: 100%; overflow-x: hidden; }
-    .bk-iframe-wrap iframe { display: block; width: 100%; border: none; }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        html, body, [data-testid="stAppViewContainer"] { overflow-x: hidden; }
+        .bk-iframe-wrap { width: 100%; overflow-x: hidden; }
+        .bk-iframe-wrap iframe { display: block; width: 100%; border: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     iframe_height = 550 * max(1, len(meta["hemispheres"]))
     bokeh_url = f"http://localhost:{st.session_state['_bokeh_port']}/bkapp"
@@ -245,10 +338,10 @@ def run_step(meta: dict):
     st.markdown(
         f"""
         <div class="bk-iframe-wrap">
-        <iframe src="{bokeh_url}" height="{iframe_height}" scrolling="no"></iframe>
+            <iframe src="{bokeh_url}" height="{iframe_height}" scrolling="no"></iframe>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    
+
     st.caption(f"Session file: `{session_file}`")

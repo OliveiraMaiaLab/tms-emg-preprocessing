@@ -118,9 +118,10 @@ def _normalize_flat_range(value):
 def _blank_mep_hemi_payload() -> dict:
     return {
         "pulses": [],
-        "preactivation_flag": [],
         "min": [],
         "max": [],
+        "hinder_preactivation_flag": [],
+        "std_preactivation_flag": [],
         "peaks_flag": [],
     }
 
@@ -136,7 +137,7 @@ def _ensure_meps_block_hemi(meps_root: dict, block: str, hemi: str) -> None:
         payload.setdefault(k, v)
 
     # normalize list types
-    for k in ("pulses", "preactivation_flag", "min", "max", "peaks_flag"):
+    for k in ("pulses", "min", "max", "hinder_preactivation_flag", "std_preactivation_flag", "peaks_flag"):
         if not isinstance(payload.get(k), list):
             payload[k] = []
 
@@ -149,7 +150,8 @@ def _ensure_meps_block_hemi(meps_root: dict, block: str, hemi: str) -> None:
         elif len(arr) > n:
             payload[name] = arr[:n]
 
-    _fit_list("preactivation_flag", 0)
+    _fit_list("hinder_preactivation_flag", 0)
+    _fit_list("std_preactivation_flag", 0)
     _fit_list("peaks_flag", 0)
     _fit_list("min", None)
     _fit_list("max", None)
@@ -333,36 +335,67 @@ def ensure_metadata() -> dict:
     meta.setdefault("_script_dir", os.getcwd())
     return meta
 
+def _template_requests_emg_ref(template: dict) -> bool:
+    other = (template.get("other") or {})
+    return str(other.get("include_rest_emg_ref", "")).strip().lower() == "yes"
+
+
 
 def ensure_template_loaded(meta: dict) -> dict:
-    need = any(k not in meta for k in ("exp_name", "channels", "exp_structure"))
-    if not need and isinstance(meta.get("channels"), np.ndarray):
-        return meta
-
+    """Load experiment template -> exp_name, channels, exp_structure (and enforce emg_ref if requested)."""
     tpath = meta.get("template_file")
+
+    # Resolve template path if missing/bad
     if not tpath or not os.path.exists(tpath):
         tdef, _, _ = load_persisted_defaults()
         if os.path.exists(tdef):
             meta["template_file"] = tdef
             tpath = tdef
+
     if not tpath or not os.path.exists(tpath):
         st.error("Template file not found. Please set it in the Input step.")
         st.session_state.step = "input"
         st.stop()
 
+    # If template already loaded, still enforce emg_ref requirement
+    already_loaded = (
+        isinstance(meta.get("channels"), np.ndarray)
+        and isinstance(meta.get("exp_structure"), list)
+        and meta.get("exp_name") is not None
+    )
+
+    if already_loaded:
+        # Minimal read: just to check include_rest_emg_ref
+        try:
+            with open(tpath, "r") as f:
+                template = json.load(f)
+        except Exception:
+            return meta
+
+        exp_structure = list(meta.get("exp_structure", []))
+        if _template_requests_emg_ref(template) and "emg_ref" not in exp_structure:
+            exp_structure.append("emg_ref")
+            meta["exp_structure"] = exp_structure
+        return meta
+
+    # Otherwise fully load template
     with open(tpath, "r") as f:
         template = json.load(f)
 
     meta["exp_name"] = template["experiment_name"]
-    meta["channels"] = np.array(
-        [
-            template["channels"]["synch_pulse"],
-            template["channels"]["right"],
-            template["channels"]["left"],
-        ]
-    )
-    meta["exp_structure"] = template["experiment_structure"]
+    meta["channels"] = np.array([
+        template["channels"]["synch_pulse"],
+        template["channels"]["right"],
+        template["channels"]["left"],
+    ])
+
+    exp_structure = list(template["experiment_structure"])
+    if _template_requests_emg_ref(template) and "emg_ref" not in exp_structure:
+        exp_structure.append("emg_ref")
+
+    meta["exp_structure"] = exp_structure
     return meta
+
 
 
 def ensure_session_file(meta: dict) -> str:
@@ -382,7 +415,7 @@ def is_segmentation_complete(session_file: str, hemis: list[str], exp_structure:
         return False
 
     seg = data.get("segmentation", {}) or {}
-    parts_to_check = list(exp_structure) + ["mh", "mvic"]
+    parts_to_check = list(exp_structure)
 
     def _valid_flat(ranges):
         if not (isinstance(ranges, list) and ranges):

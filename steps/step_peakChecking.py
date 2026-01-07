@@ -27,14 +27,14 @@ from utils.persistence import (
 )
 from utils.layout import render_text, step_nav
 
-from utils.peak_checking_io import (
+from utils.tms_module import (
+    load_meps_for_block,
     Epoch,
     read_json,
     get_epoch_from_session,
     get_peaks_flag_list,
     save_peaks_flag_list,
 )
-from utils.mep_loading import load_meps_for_block
 
 
 PREV_STEP = "mep_window"

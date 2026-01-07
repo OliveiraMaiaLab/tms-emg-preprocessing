@@ -17,5 +17,8 @@
     "t20meps",
     "t30meps",
     "rmt_pos"
-  ]
+  ],
+  "other": {
+    "include_rest_emg_ref": "yes"
+  }
 }
