@@ -13,22 +13,24 @@ The architecture is intentionally simple:
 ## Repository layout
 
 
-├── main_gui.py
-├── utils/
-│ ├── persistence.py
-│ ├── tms_module.py
-│ ├── layout.py
-│ ├── mep_loading.py
-│ └── peak_checking_io.py
-├── bk_embedding/
-│ ├── segmentation.py
-│ └── mepOverlap.py
-└── steps/
-├── step_input.py
-├── step_confirmInputs.py
-├── step_segmentation.py
-├── step_mepWindow.py
-└── step_peakChecking.py
+```
+── main_gui.py
+── utils/
+ ├── persistence.py
+ ├── tms_module.py
+ ├── layout.py
+ ├── mep_loading.py
+ └── peak_checking_io.py
+── bk_embedding/
+ ├── segmentation.py
+ └── mepOverlap.py
+── steps/
+── step_input.py
+── step_confirmInputs.py
+── step_segmentation.py
+── step_mepWindow.py
+── step_peakChecking.py
+```
 
 
 ---

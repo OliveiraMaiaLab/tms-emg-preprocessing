@@ -251,6 +251,12 @@ def load_data(file_dir, channels=np.array((3,1,2)), fs=4000,
 
     return data, tms_indexes
 
+from pathlib import Path
+from typing import Tuple
+import json
+import numpy as np
+
+
 def load_meps_for_block(
     meta: dict,
     session_file: str | Path,
@@ -258,14 +264,18 @@ def load_meps_for_block(
     hemi: str = "left",
     pre_s: float = 0.100,
     post_s: float = 0.400,
+    epoch=None,  # expects .tmin_ms and .tmax_ms if provided
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    --------------------
     Extract per-block MEP waveforms from raw EMG using pulse indices stored in session JSON.
 
     Returns:
     - t_ms: (T,) time axis in milliseconds (relative to pulse)
-    - meps: (N, T) waveforms (baseline-corrected, in uV)
+    - meps: (N, T) waveforms (in uV), mean-detrended per trial
+
+    Memory-efficient:
+    - If epoch is provided, only [epoch.tmin_ms, epoch.tmax_ms) is extracted.
+    - Otherwise, defaults to [-pre_s, +post_s) seconds.
     """
     session_file = Path(session_file)
 
@@ -283,21 +293,42 @@ def load_meps_for_block(
     ch = hemi_to_ch.get(hemi, 0)
     sig = data[ch, :]
 
-    pre_n = int(round(pre_s * fs))
-    post_n = int(round(post_s * fs))
-    n_win = pre_n + post_n
+    # -------------------------
+    # Define window directly (epoch-aware)
+    # -------------------------
+    if epoch is not None:
+        start_ms = float(epoch.tmin_ms)
+        end_ms = float(epoch.tmax_ms)
+    else:
+        start_ms = -float(pre_s) * 1000.0
+        end_ms = float(post_s) * 1000.0
 
-    t_ms = (np.arange(n_win) - pre_n) / fs * 1000.0
+    if end_ms <= start_ms:
+        raise ValueError(f"Invalid window: start_ms={start_ms} must be < end_ms={end_ms}")
+
+    start_n = int(np.round(start_ms / 1000.0 * fs))
+    end_n = int(np.round(end_ms / 1000.0 * fs))
+
+    n_win = end_n - start_n
+    if n_win <= 0:
+        raise ValueError("Window length is zero/negative after sample conversion.")
+
+    # Time axis (relative to pulse)
+    t_ms = (np.arange(start_n, end_n) / fs) * 1000.0
 
     trials = []
     for p in pulses:
         p = int(p)
-        a = p - pre_n
-        b = p + post_n
+        a = p + start_n
+        b = p + end_n
         if a < 0 or b > sig.shape[0]:
             continue
+
         y = sig[a:b].astype(float)
-        y -= float(y[:pre_n].mean())  # baseline correct
+
+        # Simple mean detrending (whole window)
+        y -= float(y.mean())
+
         trials.append(y)
 
     if not trials:
@@ -305,6 +336,7 @@ def load_meps_for_block(
 
     meps = np.asarray(trials, dtype=float)
     return t_ms, meps
+
 
 
 def get_info(path):

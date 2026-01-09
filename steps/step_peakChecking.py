@@ -6,15 +6,15 @@ Step 5: Peak checking
 - Select a block
 - Plot one axis per MEP (grid)
 - Mark MEP window bounds (vertical lines)
-- Mark min/max within that window (markers)
 - Checkbox per MEP to set peaks_flag (0/1)
-- Save peaks_flag into session["meps"][block]["left"]["peaks_flag"]
+- Auto-save peaks_flag when block / page / layout changes
+- Persist into session["meps"][block]["left"]["peaks_flag"]
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from math import ceil
 
 import numpy as np
 import streamlit as st
@@ -26,69 +26,75 @@ from utils.persistence import (
     ensure_session_file,
 )
 from utils.layout import render_text, step_nav
-
 from utils.tms_module import (
     load_meps_for_block,
     Epoch,
     read_json,
     get_epoch_from_session,
     get_peaks_flag_list,
-    save_peaks_flag_list,
+    save_peaks_flag_list,  # <-- your function: (session_file, block, flags, hemi)
 )
-
 
 PREV_STEP = "mep_window"
 THIS_STEP = "peak_checking"
 
 
-def _epoch_mask(t_ms: np.ndarray, epoch: Epoch) -> np.ndarray:
-    return (t_ms >= epoch.tmin_ms) & (t_ms <= epoch.tmax_ms)
+def _autosave_prev_if_nav_changed(session_file: Path) -> None:
+    """
+    If user changed block/page/rows/cols since last rerun, save the previous block's
+    working peaks_flag list from st.session_state into disk via save_peaks_flag_list().
+    """
+    prev = st.session_state.get("_pc_prev")
+    cur = st.session_state.get("_pc_cur")
 
+    if prev is None or cur is None:
+        return
 
-def _plot_mep_grid(
-    t_ms: np.ndarray,
-    meps: np.ndarray,
-    mep_indices: List[int],
-    epoch: Epoch,
-    ncols: int = 4,
-) -> plt.Figure:
-    n = len(mep_indices)
-    nrows = int(np.ceil(n / ncols))
+    if prev == cur:
+        return
 
-    fig, axes = plt.subplots(
-        nrows=nrows,
-        ncols=ncols,
-        figsize=(4.2 * ncols, 2.4 * nrows),
+    prev_block = prev["block"]
+    prev_work_key = f"peaks_flag_work::{prev_block}::left"
+
+    if prev_work_key not in st.session_state:
+        return
+
+    save_peaks_flag_list(
+        session_file=session_file,
+        block=prev_block,
+        flags=st.session_state[prev_work_key],
+        hemi="left",
     )
-    axes = np.atleast_1d(axes).ravel()
-    m = _epoch_mask(t_ms, epoch)
+    st.toast("Auto-saved peaks_flag", icon="💾")
 
-    for ax_i, ax in enumerate(axes):
-        if ax_i >= n:
-            ax.axis("off")
-            continue
 
-        mep_idx = mep_indices[ax_i]
-        y = meps[mep_idx, :]
+def plot_fig_and_checkbox(
+    t_ms: np.ndarray,
+    y_data: np.ndarray,
+    mep_idx: int,
+    updated: list,
+    epoch: Epoch,
+    block: str,
+) -> None:
+    """
+    Plot one MEP and a checkbox that writes into updated[mep_idx].
+    Checkbox key must be unique per (block, mep_idx).
+    """
+    checked = st.checkbox(
+        "Flag",
+        value=bool(updated[mep_idx]),
+        key=f"chk_peak::{block}::{mep_idx}",
+    )
+    updated[mep_idx] = 1 if checked else 0
 
-        ax.plot(t_ms, y)
-        ax.axvline(epoch.tmin_ms, linestyle="--")
-        ax.axvline(epoch.tmax_ms, linestyle="--")
-
-        if np.any(m):
-            y_epoch = y[m]
-            t_epoch = t_ms[m]
-            i_min = int(np.argmin(y_epoch))
-            i_max = int(np.argmax(y_epoch))
-            ax.scatter([t_epoch[i_min]], [y_epoch[i_min]], marker="o")
-            ax.scatter([t_epoch[i_max]], [y_epoch[i_max]], marker="o")
-
-        ax.set_title(f"MEP {mep_idx}", fontsize=10)
-        ax.set_xlabel("Time (ms)")
-        ax.set_ylabel("uV")
-
-    fig.tight_layout()
-    return fig
+    fig, ax = plt.subplots()
+    ax.plot(t_ms, y_data)
+    ax.axvline(epoch.tmin_ms, linestyle="--")
+    ax.axvline(epoch.tmax_ms, linestyle="--")
+    ax.set_title(f"MEP {mep_idx}", fontsize=10)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    st.pyplot(fig, clear_figure=True)
 
 
 def run_step(meta: dict):
@@ -96,11 +102,7 @@ def run_step(meta: dict):
     meta = ensure_template_loaded(meta)
     session_file = Path(ensure_session_file(meta))
 
-    step_nav(
-        THIS_STEP,
-        back_step=PREV_STEP,
-        disabled_next=True,
-    )
+    step_nav(THIS_STEP, back_step=PREV_STEP, disabled_next=True)
 
     render_text(
         "Peak checking",
@@ -111,6 +113,7 @@ def run_step(meta: dict):
         nowrap=True,
     )
 
+    # Read session + epoch
     session = read_json(session_file)
     epoch = get_epoch_from_session(session)
 
@@ -120,69 +123,87 @@ def run_step(meta: dict):
         st.error("No '*meps' blocks found in meta['exp_structure'].")
         return
 
-    topA, topB, topC = st.columns([1.3, 1.3, 1.6])
+    # -------- Controls (keys required) --------
+    topA, topB, topC, topD = st.columns([1, 1, 1, 1])
     with topA:
-        block = st.selectbox("Block", blocks, index=0)
+        block = st.selectbox("Block", blocks, index=0, key="_pc_block_sel")
     with topB:
-        page_size = st.slider("MEPs per page", min_value=5, max_value=40, value=20, step=5)
+        n_rows = st.number_input("Rows", min_value=1, max_value=12, value=4, step=1, key="_pc_rows_sel")
     with topC:
-        st.write("")
-        st.write(f"MEP window: **{epoch.tmin_ms:.1f} → {epoch.tmax_ms:.1f} ms**")
+        n_cols = st.number_input("Cols", min_value=1, max_value=12, value=5, step=1, key="_pc_cols_sel")
 
-    # Load waveforms for this block
-    t_ms, meps = load_meps_for_block(meta, session_file, block_name=block, hemi="left")
+    page_size = int(n_rows) * int(n_cols)
+
+    # Load waveforms for this block (needed to know n_meps)
+    t_ms, meps = load_meps_for_block(meta, session_file, block_name=block, hemi="left", epoch=epoch)
     if meps.size == 0 or meps.ndim != 2:
         st.warning("No MEPs found for this block (missing pulses or extraction failed).")
         return
 
     n_meps = int(meps.shape[0])
+    n_pages = int(ceil(n_meps / max(1, page_size)))
 
-    # existing flags (0/1 list)
-    peaks_flag = get_peaks_flag_list(session, block, hemi="left")
-    if len(peaks_flag) != n_meps:
-        peaks_flag = (peaks_flag + [0] * n_meps)[:n_meps]
+    with topD:
+        page = st.number_input(
+            "Page",
+            min_value=1,
+            max_value=max(1, n_pages),
+            value=1,
+            step=1,
+            key="_pc_page_sel",
+        )
 
-    # paging
-    n_pages = int(np.ceil(n_meps / page_size))
-    page = st.number_input("Page", min_value=1, max_value=max(1, n_pages), value=1, step=1)
+    # -------- Autosave tracking --------
+    # shift current -> prev
+    st.session_state["_pc_prev"] = st.session_state.get("_pc_cur")
 
-    start = (page - 1) * page_size
+    # set current snapshot
+    st.session_state["_pc_cur"] = {
+        "block": str(block),
+        "page": int(page),
+        "rows": int(n_rows),
+        "cols": int(n_cols),
+    }
+
+    _autosave_prev_if_nav_changed(session_file)
+
+    # -------- Working peaks_flag list (per block) --------
+    work_key = f"peaks_flag_work::{block}::left"
+    if work_key not in st.session_state:
+        flags = get_peaks_flag_list(session, block, hemi="left")
+        if len(flags) != n_meps:
+            flags = (flags + [0] * n_meps)[:n_meps]
+        st.session_state[work_key] = flags
+
+    updated = st.session_state[work_key]  # persistent, live list
+
+    # -------- Paging --------
+    start = (int(page) - 1) * page_size
     end = min(n_meps, start + page_size)
     mep_indices = list(range(start, end))
     st.caption(f"Showing MEPs **{start}–{end-1}** out of **{n_meps}** (0-indexed).")
 
-    # checkboxes
-    st.markdown("**Flag MEPs (peaks_flag, saved per block):**")
-    cb_cols = st.columns(5)
-    updated = peaks_flag[:]
-    for j, mep_idx in enumerate(mep_indices):
-        with cb_cols[j % 5]:
-            checked = st.checkbox(
-                f"Flag {mep_idx}",
-                value=(updated[mep_idx] == 1),
-                key=f"peaksflag__{block}__{mep_idx}",
+    # -------- Grid --------
+    for i, mep_idx in enumerate(mep_indices):
+        c = i % int(n_cols)
+        if c == 0:
+            columns = st.columns(int(n_cols))
+
+        with columns[c]:
+            plot_fig_and_checkbox(
+                t_ms=t_ms,
+                y_data=meps[mep_idx],
+                mep_idx=mep_idx,
+                updated=updated,
+                epoch=epoch,
+                block=str(block),
             )
-            updated[mep_idx] = 1 if checked else 0
 
-    # plot
-    fig = _plot_mep_grid(
-        t_ms=t_ms,
-        meps=meps,
-        mep_indices=mep_indices,
-        epoch=epoch,
-        ncols=4,
-    )
-    st.pyplot(fig, clear_figure=True)
-
-    # save
-    s1, s2 = st.columns([1, 2])
-    with s1:
-        if st.button("Save flags"):
-            try:
-                save_peaks_flag_list(session_file, block=block, flags=updated, hemi="left")
-                st.toast("Saved peaks_flag ✅")
-            except Exception as e:
-                st.toast(f"Error saving peaks_flag: {e}", icon="❌")
-
-    with s2:
-        st.write("Flags are stored as 0/1 in the session JSON under meps[block][hemi]['peaks_flag'].")
+    # # Optional safety net
+    # colA, colB = st.columns([1, 1])
+    # with colA:
+    #     if st.button("Save now", type="primary"):
+    #         save_peaks_flag_list(session_file=session_file, block=str(block), flags=updated, hemi="left")
+    #         st.success("Saved peaks_flag.")
+    # with colB:
+    #     st.caption("Auto-saves when you change block/page/rows/cols.")

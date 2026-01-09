@@ -20,8 +20,8 @@ st.set_page_config(layout="wide")
 
 # bootstrap state
 if "step" not in st.session_state:
-    st.session_state.step = "input"
-    # st.session_state.step = "mep_window"
+    # st.session_state.step = "input"
+    st.session_state.step = "peak_checking"
 
 if "metadata" not in st.session_state:
     # ✨ load_persisted_defaults now returns (template_file, input_file, output_dir)
