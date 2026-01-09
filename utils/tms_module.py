@@ -264,6 +264,7 @@ def load_meps_for_block(
     hemi: str = "left",
     pre_s: float = 0.100,
     post_s: float = 0.400,
+    detrend: bool = True,
     epoch=None,  # expects .tmin_ms and .tmax_ms if provided
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -326,8 +327,9 @@ def load_meps_for_block(
 
         y = sig[a:b].astype(float)
 
-        # Simple mean detrending (whole window)
-        y -= float(y.mean())
+        if detrend:
+            # Simple mean detrending (whole window)
+            y -= float(y.mean())
 
         trials.append(y)
 

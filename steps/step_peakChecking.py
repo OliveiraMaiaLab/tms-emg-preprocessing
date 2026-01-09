@@ -19,6 +19,9 @@ from math import ceil
 import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LinearLocator, FuncFormatter
+
+
 
 from utils.persistence import (
     ensure_metadata,
@@ -34,6 +37,30 @@ from utils.tms_module import (
     get_peaks_flag_list,
     save_peaks_flag_list,  # <-- your function: (session_file, block, flags, hemi)
 )
+
+plt.rcParams.update({
+    # Fonts
+    "font.size": 22,
+    "axes.titlesize": 26,
+    "axes.labelsize": 24,
+    "xtick.labelsize": 20,
+    "ytick.labelsize": 20,
+    "legend.fontsize": 20,
+
+    # Lines / markers
+    "lines.linewidth": 3.0,
+    "lines.markersize": 10,
+
+    # Axes
+    "axes.linewidth": 2.0,
+    "xtick.major.width": 2.0,
+    "ytick.major.width": 2.0,
+    "xtick.major.size": 8,
+    "ytick.major.size": 8,
+
+    # Resolution
+    "figure.dpi": 200,
+})
 
 PREV_STEP = "mep_window"
 THIS_STEP = "peak_checking"
@@ -75,26 +102,55 @@ def plot_fig_and_checkbox(
     updated: list,
     epoch: Epoch,
     block: str,
+    mep_min: tuple | None = None,   # (min_ms, min_val)
+    mep_max: tuple | None = None,   # (max_ms, max_val)
 ) -> None:
     """
-    Plot one MEP and a checkbox that writes into updated[mep_idx].
-    Checkbox key must be unique per (block, mep_idx).
+    Plot one MEP + checkbox.
+
+    If provided, plot stored extrema markers:
+      mep_min = (min_ms, min_val)
+      mep_max = (max_ms, max_val)
     """
-    checked = st.checkbox(
-        "Flag",
-        value=bool(updated[mep_idx]),
-        key=f"chk_peak::{block}::{mep_idx}",
-    )
+    _1, _2, = st.columns([1,1.6])
+    with _2:
+        checked = st.checkbox(
+            f"MEP {mep_idx}",
+            value=bool(updated[mep_idx]),
+            key=f"chk_peak::{block}::{mep_idx}",
+        )
     updated[mep_idx] = 1 if checked else 0
 
     fig, ax = plt.subplots()
+
+    # stored extrema markers (if available)
+    if mep_min is not None:
+        min_ms, min_val = mep_min
+        if min_ms is not None and min_val is not None:
+            ax.scatter([min_ms], [min_val], marker=6, s=250)
+
+    if mep_max is not None:
+        max_ms, max_val = mep_max
+        if max_ms is not None and max_val is not None:
+            ax.scatter([max_ms], [max_val], marker=7, s=250)
+
     ax.plot(t_ms, y_data)
-    ax.axvline(epoch.tmin_ms, linestyle="--")
-    ax.axvline(epoch.tmax_ms, linestyle="--")
-    ax.set_title(f"MEP {mep_idx}", fontsize=10)
+
+    ymin, ymax = ax.get_ylim()
+    pad = 0.05 * (ymax - ymin)
+    ax.set_ylim(ymin - pad, ymax + pad)
+    ax.yaxis.set_major_locator(LinearLocator(5))
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda v, pos: f"{v:8.0f}")
+    )
+        
+    # ax.set_title(f"MEP {mep_idx}", )
     ax.set_xticks([])
-    ax.set_yticks([])
+    ax.margins(0)
+    # fig.tight_layout(pad=0)
+    # ax.set_position([0.22, 0.12, 0.78, 0.78])
     st.pyplot(fig, clear_figure=True)
+
 
 
 def run_step(meta: dict):
@@ -135,7 +191,7 @@ def run_step(meta: dict):
     page_size = int(n_rows) * int(n_cols)
 
     # Load waveforms for this block (needed to know n_meps)
-    t_ms, meps = load_meps_for_block(meta, session_file, block_name=block, hemi="left", epoch=epoch)
+    t_ms, meps = load_meps_for_block(meta, session_file, block_name=block, hemi="left", epoch=epoch, detrend = False)
     if meps.size == 0 or meps.ndim != 2:
         st.warning("No MEPs found for this block (missing pulses or extraction failed).")
         return
@@ -177,6 +233,13 @@ def run_step(meta: dict):
 
     updated = st.session_state[work_key]  # persistent, live list
 
+    # stored extrema (now tuples): [(ms, val), ...]
+    session = read_json(session_file)
+    left_payload = (((session.get("meps") or {}).get(str(block)) or {}).get("left") or {})
+    mins = left_payload.get("min", [])
+    maxs = left_payload.get("max", [])
+
+
     # -------- Paging --------
     start = (int(page) - 1) * page_size
     end = min(n_meps, start + page_size)
@@ -190,6 +253,9 @@ def run_step(meta: dict):
             columns = st.columns(int(n_cols))
 
         with columns[c]:
+            mep_min = mins[mep_idx] if mep_idx < len(mins) else None
+            mep_max = maxs[mep_idx] if mep_idx < len(maxs) else None
+
             plot_fig_and_checkbox(
                 t_ms=t_ms,
                 y_data=meps[mep_idx],
@@ -197,6 +263,8 @@ def run_step(meta: dict):
                 updated=updated,
                 epoch=epoch,
                 block=str(block),
+                mep_min=mep_min,
+                mep_max=mep_max,
             )
 
     # # Optional safety net

@@ -15,6 +15,8 @@ import streamlit as st
 import json
 from pathlib import Path
 import numpy as np
+from scipy.signal import find_peaks
+from math import ceil
 
 from utils.persistence import (
     ensure_metadata,
@@ -23,7 +25,7 @@ from utils.persistence import (
 )
 from utils.layout import render_text, step_nav
 from bk_embedding.mepOverlap import start_bokeh_app
-from utils.tms_module import load_data
+from utils.tms_module import load_data, read_json, get_epoch_from_session
 
 
 def save_mep_window_to_session(session_file: str, window_s: tuple[float, float]) -> None:
@@ -35,38 +37,62 @@ def save_mep_window_to_session(session_file: str, window_s: tuple[float, float])
     js["mep_window"] = [beg, end]
     Path(session_file).write_text(json.dumps(js, indent=2))
 
+def _best_peak_idx_and_val(x: np.ndarray, pk_width: int | None, distance: int) -> tuple[int, float]:
+    """
+    Return (idx, value) for the most prominent peak in x.
+    If none found, return (0, x[0]).
+    """
+    kwargs = {"distance": distance}
+    if pk_width is not None and pk_width > 0:
+        kwargs["width"] = pk_width
+
+    peaks, props = find_peaks(x, **kwargs, prominence=0)  # one call
+    if peaks.size == 0:
+        return 0, float(x[0])
+
+    # Choose the most prominent peak (robust if >1 slips through)
+    prom = props.get("prominences")
+    best_j = int(np.argmax(prom)) if prom is not None and len(prom) else 0
+    idx = int(peaks[best_j])
+    return idx, float(x[idx])
+
 
 def compute_and_store_minmax(session_file: str, meta: dict) -> None:
     """
     Uses:
       - session["meps"][block][hemi]["pulses"] (sample indices)
-      - session["mep_window"] = [beg_s, end_s]
-    Computes:
-      - min/max inside [beg_s, end_s] relative to pulse
-    """
-    js = json.loads(Path(session_file).read_text())
-    w = js.get("mep_window", [None, None])
-    if not (isinstance(w, list) and len(w) == 2 and w[0] is not None and w[1] is not None):
-        raise RuntimeError("Missing mep_window in session file.")
+      - epoch window from session (same source as step_peakChecking)
+        (i.e., via get_epoch_from_session(session))
 
-    beg_s, end_s = float(w[0]), float(w[1])
+    Computes:
+      - min/max inside [epoch.tmin_ms, epoch.tmax_ms] relative to pulse
+        (converts ms -> samples using fs)
+    """
+    # --- load session + epoch exactly like step_peakChecking ---
+    js = read_json(Path(session_file))
+    epoch = get_epoch_from_session(js)
+
     fs = float(meta["sampling_rate"])
 
     # Load full raw data once
     data, _tms = load_data(meta["input_file"], channels=meta.get("channels"))
     hemis = list(meta.get("hemispheres", ["left"]))
 
-    # Map hemi -> channel index in data returned by load_data()
-    # tms_module.load_data returns [left, right] => left=0 right=1
     hemi_to_ch = {"left": 0, "right": 1}
 
     meps_root = js.get("meps", {})
     if not isinstance(meps_root, dict):
         return
 
-    # also baseline-correct using pre-stim [-100ms, 0]
+    # baseline-correct using pre-stim [-100ms, 0]
     pre_s = 0.100
     pre_n = int(round(pre_s * fs))
+
+    # epoch bounds in *samples* (epoch is in ms relative to pulse)
+    a_off = int(round((epoch.tmin_ms / 1000.0) * fs))
+    b_off = int(round((epoch.tmax_ms / 1000.0) * fs))
+    if a_off >= b_off:
+        raise ValueError("Epoch invalid after discretization (tmin >= tmax).")
 
     for block, block_payload in meps_root.items():
         if not isinstance(block_payload, dict):
@@ -86,37 +112,40 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
             ch = hemi_to_ch.get(hemi, 0)
             sig = data[ch, :]
 
-            # indices for the mep window relative to pulse
-            a_off = int(round(beg_s * fs))
-            b_off = int(round(end_s * fs))
-            if a_off >= b_off:
-                raise ValueError("mep_window invalid after discretization (beg >= end).")
+            # find peaks
+            pk_width = ceil(fs*0.001)
 
             mins, maxs = [], []
+            mep_start = float(epoch.tmin_ms)
+            dist = None  # set per MEP (depends on length)
+
             for p in pulses:
                 p = int(p)
-
-                # baseline window: [p-pre_n, p)
-                b0 = p - pre_n
-                b1 = p
-                if b0 < 0 or b1 <= 0 or b1 > sig.shape[0]:
-                    baseline = 0.0
-                else:
-                    baseline = float(sig[b0:b1].mean())
-
                 a = p + a_off
                 b = p + b_off
+
                 if a < 0 or b > sig.shape[0]:
-                    mins.append(None)
-                    maxs.append(None)
+                    mins.append((None, None))
+                    maxs.append((None, None))
                     continue
 
-                y = sig[a:b] - baseline
-                mins.append(float(np.min(y)))
-                maxs.append(float(np.max(y)))
+                mep = sig[a:b].astype(float)
+                dist = max(1, len(mep) - 1)
+
+                max_i, max_val = _best_peak_idx_and_val(mep, pk_width=pk_width, distance=dist)
+                min_i, min_val = _best_peak_idx_and_val(-mep, pk_width=pk_width, distance=dist)
+                min_val = -min_val  # because we ran on -mep
+
+                max_ms = (max_i * 1000.0 / fs) + mep_start
+                min_ms = (min_i * 1000.0 / fs) + mep_start
+
+                maxs.append((float(max_ms), float(max_val)))
+                mins.append((float(min_ms), float(min_val)))
 
             hp["min"] = mins
             hp["max"] = maxs
+
+
 
             # keep lists aligned if flags not present
             n = len(pulses)
@@ -133,6 +162,7 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
 
     js["meps"] = meps_root
     Path(session_file).write_text(json.dumps(js, indent=2))
+
 
 
 def run_step(meta: dict):
