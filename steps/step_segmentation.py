@@ -22,8 +22,9 @@ from utils.persistence import (
 from bk_embedding.segmentation import start_bokeh_app
 from utils.layout import render_text, step_nav
 
-
-NEXT_AFTER_SEGMENTATION = "mep_window"
+PREV_STEP = 'input'
+THIS_STEP = 'segmentation'
+NEXT_STEP = "mep_window"
 
 
 def _segmentation_missing_flat(session_file: str, parts: list[str]) -> list[str]:
@@ -273,9 +274,10 @@ def run_step(meta: dict):
 
     # Nav bar
     step_nav(
-        "segmentation",
-        back_step="confirm",
-        next_step=NEXT_AFTER_SEGMENTATION,
+        THIS_STEP,
+        step_title = "EMG Segmentation",
+        back_step=PREV_STEP,
+        next_step=NEXT_STEP,
         on_next=_try_advance,
         right_label="Advance ▶",
     )
@@ -309,16 +311,6 @@ def run_step(meta: dict):
             ranges_store=st.session_state["_ranges_store"],
             ranges_lock=st.session_state["_ranges_lock"],
         )
-
-    render_text(
-        "EMG Segmentation",
-        font_color="black",
-        font_weight="bold",
-        horizontal_alignment="center",
-        font_size=None,
-        nowrap=True,
-        heading_level=1,
-    )
 
     # Hide horizontal overflow globally + in the iframe wrapper
     st.markdown(

@@ -8,6 +8,7 @@ import streamlit as st
 
 def step_nav(
     step_id: str,
+    step_title:str,
     *,
     next_step: str | None = None,
     back_step: str | None = None,
@@ -29,9 +30,21 @@ def step_nav(
     """
     c_left, c_spacer, c_right = st.columns([1, 6, 1])
 
+    with c_spacer:
+        render_text(
+            step_title,
+            font_color="black",
+            font_weight="normal",
+            horizontal_alignment="center",
+            heading_level=1,
+            nowrap=True,
+        )
+
     with c_left:
         if back_step or on_back:
-            if st.button(left_label, key=f"nav_back_{step_id}", use_container_width=True):
+            if st.button(left_label, 
+                         key=f"nav_back::{step_id}::{back_step}",
+                         use_container_width=True):
                 if on_back:
                     on_back()
                 elif back_step:
@@ -41,7 +54,7 @@ def step_nav(
     with c_right:
         if st.button(
             right_label,
-            key=f"nav_next_{step_id}",
+            key=f"nav_back::{step_id}::{next_step}",
             use_container_width=True,
             disabled=disabled_next,
         ):

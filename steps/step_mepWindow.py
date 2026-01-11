@@ -27,6 +27,10 @@ from utils.layout import render_text, step_nav
 from bk_embedding.mepOverlap import start_bokeh_app
 from utils.tms_module import load_data, read_json, get_epoch_from_session
 
+PREV_STEP = 'segmentation'
+THIS_STEP = 'mep_window'
+NEXT_STEP = "peak_checking"
+
 
 def save_mep_window_to_session(session_file: str, window_s: tuple[float, float]) -> None:
     beg, end = map(float, window_s)
@@ -194,21 +198,14 @@ def run_step(meta: dict):
         return True
 
     step_nav(
-        "mep_window",
-        back_step="segmentation",
-        next_step="peak_checking",
+        THIS_STEP,
+        step_title = "MEP window definition",
+        back_step=PREV_STEP,
+        next_step=NEXT_STEP,
         on_next=_on_next,
         disabled_next=False,
     )
 
-    render_text(
-        "MEP window definition",
-        font_color="black",
-        font_weight="normal",
-        horizontal_alignment="center",
-        heading_level=1,
-        nowrap=True,
-    )
 
     # Restart Bokeh if context changes
     bokeh_key = (session_file, meta.get("input_file"), meta.get("sampling_rate"))

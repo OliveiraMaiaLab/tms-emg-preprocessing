@@ -64,6 +64,70 @@ plt.rcParams.update({
 
 PREV_STEP = "mep_window"
 THIS_STEP = "peak_checking"
+NEXT_STEP = "peak_correction"
+
+def _pc_seen_mask_key(block: str, hemi: str) -> str:
+    return f"_pc_seen_mask::{block}::{hemi}"
+
+def _pc_nmeps_cache_key(hemi: str) -> str:
+    return f"_pc_nmeps_cache::{hemi}"  # dict: {block: n_meps}
+
+def _pc_all_blocks_key() -> str:
+    return "_pc_all_blocks"
+
+def _pc_hemi_key() -> str:
+    return "_pc_hemi"
+
+def _ensure_seen_mask(block: str, hemi: str, n_meps: int) -> list[int]:
+    key = _pc_seen_mask_key(block, hemi)
+
+    if key not in st.session_state:
+        st.session_state[key] = [0] * int(n_meps)
+
+    mask = st.session_state[key]
+
+    if not isinstance(mask, list):
+        mask = [0] * int(n_meps)
+        st.session_state[key] = mask
+
+    if len(mask) != int(n_meps):
+        mask = (mask + [0] * int(n_meps))[: int(n_meps)]
+        st.session_state[key] = mask
+
+    return mask
+
+
+def _mark_meps_seen(block: str, hemi: str, n_meps: int, mep_indices: list[int]) -> None:
+    mask = _ensure_seen_mask(block, hemi, n_meps)
+    for idx in mep_indices:
+        if 0 <= idx < len(mask):
+            mask[idx] = 1
+    st.session_state[_pc_seen_mask_key(block, hemi)] = mask
+
+
+def _cache_n_meps(block: str, hemi: str, n_meps: int) -> None:
+    key = _pc_nmeps_cache_key(hemi)
+    if key not in st.session_state or not isinstance(st.session_state[key], dict):
+        st.session_state[key] = {}
+    st.session_state[key][str(block)] = int(n_meps)
+
+
+def _seen_count_for_block(block: str, hemi: str, n_meps: int) -> tuple[int, int]:
+    mask = _ensure_seen_mask(block, hemi, n_meps)
+    return (sum(mask), int(n_meps))
+
+
+def _all_seen_for_block(block: str, hemi: str, n_meps: int) -> bool:
+    mask = _ensure_seen_mask(block, hemi, n_meps)
+    return all(v == 1 for v in mask)
+
+
+def _get_cached_n_meps(block: str, hemi: str) -> int | None:
+    cache = st.session_state.get(_pc_nmeps_cache_key(hemi))
+    if not isinstance(cache, dict):
+        return None
+    val = cache.get(str(block))
+    return int(val) if isinstance(val, int) else None
 
 
 def _autosave_prev_if_nav_changed(session_file: Path) -> None:
@@ -158,16 +222,57 @@ def run_step(meta: dict):
     meta = ensure_template_loaded(meta)
     session_file = Path(ensure_session_file(meta))
 
-    step_nav(THIS_STEP, back_step=PREV_STEP, disabled_next=True)
+    def _on_next() -> bool:
+        all_blocks = st.session_state.get(_pc_all_blocks_key(), [])
+        hemi = st.session_state.get(_pc_hemi_key(), "left")
 
-    render_text(
-        "Peak checking",
-        font_color="black",
-        font_weight="normal",
-        horizontal_alignment="center",
-        heading_level=1,
-        nowrap=True,
+        if not all_blocks:
+            st.error("Internal error: no MEP blocks found in state.")
+            return False
+
+        not_visited = []
+        incomplete = []
+
+        for b in all_blocks:
+            n_b = _get_cached_n_meps(b, hemi)
+
+            if n_b is None:
+                not_visited.append(b)
+                continue
+
+            if n_b <= 0:
+                continue
+
+            if not _all_seen_for_block(b, hemi, n_b):
+                seen_b, total_b = _seen_count_for_block(b, hemi, n_b)
+                incomplete.append((b, seen_b, total_b))
+
+        if not_visited or incomplete:
+            msg = "You must plot all MEPs at least once in **all MEP blocks** before advancing.\n\n"
+
+            if not_visited:
+                msg += "Blocks not visited yet (open them once so I can count MEPs):\n"
+                msg += "\n".join([f"- {b}" for b in not_visited]) + "\n\n"
+
+            if incomplete:
+                msg += "Blocks still incomplete:\n"
+                msg += "\n".join([f"- {b}: {seen}/{total}" for b, seen, total in incomplete])
+
+            st.error(msg)
+            return False
+
+        return True
+
+
+    step_nav(
+        THIS_STEP,
+        step_title = "Peak Checking",
+        back_step=PREV_STEP,
+        next_step=NEXT_STEP,
+        on_next=_on_next,
+        disabled_next=False,
     )
+    
 
     # Read session + epoch
     session = read_json(session_file)
@@ -175,6 +280,9 @@ def run_step(meta: dict):
 
     # Only iterate actual MEP blocks
     blocks = [b for b in (meta.get("exp_structure", []) or []) if str(b).lower().endswith("meps")]
+    st.session_state[_pc_all_blocks_key()] = [str(b) for b in blocks]
+    st.session_state[_pc_hemi_key()] = "left"
+
     if not blocks:
         st.error("No '*meps' blocks found in meta['exp_structure'].")
         return
@@ -186,7 +294,7 @@ def run_step(meta: dict):
     with topB:
         n_rows = st.number_input("Rows", min_value=1, max_value=12, value=4, step=1, key="_pc_rows_sel")
     with topC:
-        n_cols = st.number_input("Cols", min_value=1, max_value=12, value=5, step=1, key="_pc_cols_sel")
+        n_cols = st.number_input("Cols", min_value=1, max_value=12, value=10, step=1, key="_pc_cols_sel")
 
     page_size = int(n_rows) * int(n_cols)
 
@@ -198,6 +306,8 @@ def run_step(meta: dict):
 
     n_meps = int(meps.shape[0])
     n_pages = int(ceil(n_meps / max(1, page_size)))
+    _cache_n_meps(block=str(block), hemi="left", n_meps=n_meps)
+
 
     with topD:
         page = st.number_input(
@@ -245,6 +355,10 @@ def run_step(meta: dict):
     end = min(n_meps, start + page_size)
     mep_indices = list(range(start, end))
     st.caption(f"Showing MEPs **{start}–{end-1}** out of **{n_meps}** (0-indexed).")
+    seen, total = _seen_count_for_block(str(block), "left", n_meps)
+    st.caption(f"Seen in this block: **{seen}/{total}**")
+    _mark_meps_seen(block=str(block), hemi="left", n_meps=n_meps, mep_indices=mep_indices)
+
 
     # -------- Grid --------
     for i, mep_idx in enumerate(mep_indices):
@@ -266,7 +380,7 @@ def run_step(meta: dict):
                 mep_min=mep_min,
                 mep_max=mep_max,
             )
-
+            
     # # Optional safety net
     # colA, colB = st.columns([1, 1])
     # with colA:
