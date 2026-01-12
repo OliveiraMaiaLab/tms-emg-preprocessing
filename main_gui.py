@@ -19,18 +19,30 @@ from steps.step_peakCorrection import run_step as step_peakCorrection
 
 st.set_page_config(layout="wide")
 
-# bootstrap state
+# -------------------------
+# Bootstrap router state
+# -------------------------
 if "step" not in st.session_state:
     # st.session_state.step = "input"
     st.session_state.step = "peak_correction"
 
+# -------------------------
+# Bootstrap metadata
+# -------------------------
 if "metadata" not in st.session_state:
-    # ✨ load_persisted_defaults now returns (template_file, input_file, output_dir)
-    tdef, idef, odef = load_persisted_defaults()
+    # load_persisted_defaults now returns a dict (auto-upgraded)
+    defaults = load_persisted_defaults()
+
     st.session_state.metadata = {
-        "template_file": tdef,
-        "input_file": idef,
-        "output_dir": odef,
+        "template_file": defaults.get("template_file", ""),
+        "input_file": defaults.get("input_file", ""),
+        "output_dir": defaults.get("output_dir", ""),
+
+        # NEW persisted fields
+        "data_dir": defaults.get("data_dir", ""),
+        "researcher_id": defaults.get("researcher_id", ""),
+        "version": defaults.get("version", ""),
+
         "sampling_rate": 4000,
         "subj_id": "example_sub",
         "session": 1,
@@ -40,7 +52,9 @@ if "metadata" not in st.session_state:
 
 meta = st.session_state.metadata
 
-# route
+# -------------------------
+# Route map
+# -------------------------
 ROUTES = {
     "input": step_input,
     "confirmInputs": step_confirmInputs,
@@ -49,4 +63,7 @@ ROUTES = {
     "peak_checking": step_peakCheck,
     "peak_correction": step_peakCorrection,
 }
+
 ROUTES.get(st.session_state.step, step_input)(meta)
+
+   

@@ -17,8 +17,36 @@ streamlit run main_gui.py
 
 This GUI is intended to replace the older step-by-step guide. The previous implementation remains available in `old_pipeline/` on the `main` branch for reference.
 
-
 --- 
+## 🧪 Environment setup
+
+This project provides three environment specifications:
+
+- **`environment.yml`**  
+  Portable Conda environment specification (package versions pinned, no build hashes).
+
+- **`conda-win64-explicit.txt`**  
+  Exact Conda build lock for Windows (fully reproducible on win-64).
+
+- **`requirements-pip.txt`**  
+  Exact pip package versions.
+
+---
+
+### ▶️ Option 1 — Create from `environment.yml` (recommended for general use)
+```bash
+conda env create -f environment.yml
+```
+
+### ▶️ Option 2 — Create an exact Windows clone (maximum reproducibility)
+```bash
+conda create -n <env_name> --file conda-win64-explicit.txt
+conda activate <env_name>
+python -m pip install -r requirements-pip.txt
+```
+Use this option if you need the environment to match the original exactly (same Conda builds and pip versions, Windows only).
+
+---
 
 Package organization
 

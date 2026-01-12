@@ -1,2 +1,3 @@
 /.tms_emg_gui_settings.json
 /output
+__pycache__/

@@ -1,3 +1,9 @@
+"""
+dash_peak_editor.py
+--------------
+...
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

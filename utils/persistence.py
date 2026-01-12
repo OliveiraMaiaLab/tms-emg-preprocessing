@@ -29,6 +29,7 @@ import json
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+from datetime import datetime, timezone
 
 import numpy as np
 import streamlit as st
@@ -38,6 +39,110 @@ SETTINGS_FILE = RUN_DIR / ".tms_emg_gui_settings.json"
 DEFAULT_TEMPLATE = str(RUN_DIR / "experiment_template.json")
 DEFAULT_INPUT = str(RUN_DIR / "example_data.bin")
 DEFAULT_OUTPUT = str(RUN_DIR)
+DEFAULT_DATA_DIR = str(RUN_DIR)
+DEFAULT_RESEARCHER_ID = ""
+PIPELINE_VERSION = "1.0.0"
+
+
+def _read_processed_registry(path: Path) -> dict:
+    """
+    Read the processed-sessions registry JSON.
+
+    If missing: returns an empty registry.
+    If corrupt: writes a .corrupt backup and returns an empty registry.
+    """
+    empty = {"version": 1, "processed": []}
+
+    if not path.exists():
+        return empty
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        # Backup corrupt file (best effort) and start fresh
+        try:
+            bak = path.with_suffix(path.suffix + ".corrupt")
+            bak.write_text(path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+        except Exception:
+            pass
+        return empty
+
+    if not isinstance(data, dict):
+        return empty
+
+    data.setdefault("version", 1)
+    data.setdefault("processed", [])
+    if not isinstance(data["processed"], list):
+        data["processed"] = []
+    return data
+
+
+def _write_processed_registry_atomic(path: Path, payload: dict) -> None:
+    """
+    Atomic write to avoid corrupting registry on crash.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def update_processed_sessions_registry(
+    *,
+    output_dir: str | Path,
+    data_file: str | Path,
+    session_file: str | Path,
+    researcher_id: str = "",
+    pipeline_version: str = "",
+    registry_name: str = "processed_sessions.json",
+) -> Path:
+    """
+    Upsert a record mapping data filename -> session filename.
+
+    Stores registry at: <output_dir>/<registry_name>
+
+    Record format:
+      {
+        "data_file": "<basename>",
+        "session_file": "<basename>",
+        "finished_at": "<UTC ISO>",
+        "researcher_id": "<string>",
+        "pipeline_version": "<string>"
+      }
+
+    Upsert key: data_file basename.
+    Returns the registry path.
+    """
+    outdir = Path(output_dir).expanduser().resolve()
+    reg_path = outdir / registry_name
+
+    data_name = Path(data_file).name
+    sess_name = Path(session_file).name
+    finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    reg = _read_processed_registry(reg_path)
+
+    # Upsert by data_file
+    for rec in reg["processed"]:
+        if isinstance(rec, dict) and rec.get("data_file") == data_name:
+            rec["session_file"] = sess_name
+            rec["finished_at"] = finished_at
+            rec["researcher_id"] = str(researcher_id or "")
+            rec["pipeline_version"] = str(pipeline_version or "")
+            _write_processed_registry_atomic(reg_path, reg)
+            return reg_path
+
+    reg["processed"].append(
+        {
+            "data_file": data_name,
+            "session_file": sess_name,
+            "finished_at": finished_at,
+            "researcher_id": str(researcher_id or ""),
+            "pipeline_version": str(pipeline_version or ""),
+        }
+    )
+    _write_processed_registry_atomic(reg_path, reg)
+    return reg_path
 
 
 # ---------- low-level json helpers ----------
@@ -45,7 +150,7 @@ def _json_read(path: Path, fallback: dict) -> dict:
     if not path.exists():
         return fallback
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (JSONDecodeError, OSError, ValueError):
         return fallback
 
@@ -60,33 +165,59 @@ def _json_write_atomic(path: Path, payload: dict) -> None:
 # ---------- app-level defaults ----------
 def load_persisted_defaults():
     """
-    Returns (template_file, input_file, output_dir).
-    Falls back to sensible defaults if settings file is missing/corrupt.
+    Returns persisted GUI defaults.
+
+    Always returns a complete dict (new keys added if missing),
+    and auto-upgrades older settings files.
     """
     defaults = {
         "template_file": DEFAULT_TEMPLATE,
         "input_file": DEFAULT_INPUT,
         "output_dir": DEFAULT_OUTPUT,
+        "data_dir": DEFAULT_DATA_DIR,
+        "researcher_id": DEFAULT_RESEARCHER_ID,
+        "version": PIPELINE_VERSION,
     }
+
     data = _json_read(SETTINGS_FILE, defaults)
-    if not SETTINGS_FILE.exists():
-        _json_write_atomic(SETTINGS_FILE, defaults)
-    return (
-        data.get("template_file", DEFAULT_TEMPLATE),
-        data.get("input_file", DEFAULT_INPUT),
-        data.get("output_dir", DEFAULT_OUTPUT),
-    )
+
+    # Auto-upgrade missing keys
+    upgraded = False
+    for k, v in defaults.items():
+        if k not in data:
+            data[k] = v
+            upgraded = True
+
+    # If file missing or upgraded, write back
+    if not SETTINGS_FILE.exists() or upgraded:
+        _json_write_atomic(SETTINGS_FILE, data)
+
+    return data
 
 
-def save_persisted_defaults(template_path, input_path, output_dir):
-    _json_write_atomic(
-        SETTINGS_FILE,
+
+def save_persisted_defaults(
+    *,
+    template_path,
+    input_path,
+    output_dir,
+    data_dir,
+    researcher_id,
+):
+    payload = load_persisted_defaults()
+
+    payload.update(
         {
             "template_file": str(template_path),
             "input_file": str(input_path),
             "output_dir": str(output_dir),
-        },
+            "data_dir": str(data_dir),
+            "researcher_id": str(researcher_id),
+            "version": PIPELINE_VERSION,
+        }
     )
+
+    _json_write_atomic(SETTINGS_FILE, payload)
 
 
 # ---------- helpers for FLAT segmentation ----------
@@ -182,9 +313,11 @@ def _init_session_payload(meta, exp_structure: List[str]):
             "session": meta["session"],
             "hemispheres": hemis,
             "output_dir": str(meta.get("output_dir", DEFAULT_OUTPUT)),
+            "researcher_id": meta.get("researcher_id", ""),
+            "pipeline_version": meta.get("version", ""),
         },
         "segmentation": segmentation,
-        "mep_window": [None, None],  # relative to pulse in seconds
+        "mep_window": [None, None],
         "meps": meps_root,
     }
 
@@ -269,6 +402,8 @@ def create_or_update_session_file(meta, exp_structure: List[str]) -> str:
                 "session": meta["session"],
                 "hemispheres": hemis,
                 "output_dir": str(outdir),
+                "researcher_id": meta.get("researcher_id", ""),
+                "pipeline_version": meta.get("version", ""),
             }
         )
         data = _ensure_structure(data, hemis, exp_structure)
@@ -308,32 +443,47 @@ def write_segmentation_ranges(
 # ---------- bootstrap guards ----------
 def ensure_metadata() -> dict:
     if "metadata" not in st.session_state:
-        tdef, idef, odef = load_persisted_defaults()
+        defaults = load_persisted_defaults()
+
         st.session_state.metadata = {
-            "template_file": tdef,
-            "input_file": idef,
-            "output_dir": odef,
+            "template_file": defaults["template_file"],
+            "input_file": defaults["input_file"],
+            "output_dir": defaults["output_dir"],
+            "data_dir": defaults["data_dir"],
+            "researcher_id": defaults["researcher_id"],
+            "version": defaults["version"],
             "sampling_rate": 4000,
             "subj_id": "example_sub",
             "session": 1,
             "hemispheres": ["left"],
             "_script_dir": os.getcwd(),
         }
-    meta = st.session_state.metadata
 
+    meta = st.session_state.metadata
+    defaults = load_persisted_defaults()
+
+    # Fill missing / empty from persisted defaults (dict, not tuple)
     if not meta.get("template_file"):
-        meta["template_file"] = load_persisted_defaults()[0]
+        meta["template_file"] = defaults["template_file"]
     if not meta.get("input_file"):
-        meta["input_file"] = load_persisted_defaults()[1]
+        meta["input_file"] = defaults["input_file"]
     if not meta.get("output_dir"):
-        meta["output_dir"] = load_persisted_defaults()[2]
+        meta["output_dir"] = defaults["output_dir"]
+    if not meta.get("data_dir"):
+        meta["data_dir"] = defaults["data_dir"]
+    if meta.get("researcher_id") is None:
+        meta["researcher_id"] = defaults.get("researcher_id", "")
+    if not meta.get("version"):
+        meta["version"] = defaults.get("version", PIPELINE_VERSION)
 
     meta.setdefault("sampling_rate", 4000)
     meta.setdefault("subj_id", "example_sub")
     meta.setdefault("session", 1)
     meta.setdefault("hemispheres", ["left"])
     meta.setdefault("_script_dir", os.getcwd())
+
     return meta
+
 
 def _template_requests_emg_ref(template: dict) -> bool:
     other = (template.get("other") or {})
