@@ -14,8 +14,8 @@ Session schema (relevant bits):
       "<hemi>": {
         "pulses": [...],               # list[int] (sample indices)
         "preactivation_flag": [...],   # list[int] 0/1
-        "min": [...],                  # list[float|None]
-        "max": [...],                  # list[float|None]
+        "min": [[min1_ms, min1_val],...],                  # list[float|None]
+        "max": [[max1_ms, max1_val]...],                  # list[float|None]
         "peaks_flag": [...]            # list[int] 0/1
       }
     }

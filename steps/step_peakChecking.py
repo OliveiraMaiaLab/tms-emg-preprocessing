@@ -59,12 +59,53 @@ plt.rcParams.update({
     "ytick.major.size": 8,
 
     # Resolution
-    "figure.dpi": 200,
+    "figure.dpi": 30,
 })
 
 PREV_STEP = "mep_window"
 THIS_STEP = "peak_checking"
 NEXT_STEP = "peak_correction"
+
+import io
+
+
+def _freeze_extrema(x):
+    """
+    Convert extrema (tuple/list like [ms, val]) into a hashable (ms, val) tuple.
+    Returns None if x is None.
+    """
+    if x is None:
+        return None
+    if isinstance(x, (list, tuple)) and len(x) == 2:
+        a, b = x
+        # keep None as None; cast numbers to float for stability
+        a = None if a is None else float(a)
+        b = None if b is None else float(b)
+        return (a, b)
+    # unexpected shape/type -> make it hashable anyway
+    return (str(type(x)), str(x))
+
+
+def _pc_png_cache_root_key(block: str, hemi: str) -> str:
+    return f"_pc_png_cache::{block}::{hemi}"
+
+def _get_png_cache(block: str, hemi: str) -> dict:
+    key = _pc_png_cache_root_key(block, hemi)
+    if key not in st.session_state or not isinstance(st.session_state[key], dict):
+        st.session_state[key] = {}
+    return st.session_state[key]
+
+def _png_key(mep_idx: int, mep_min, mep_max) -> tuple:
+    """
+    Cache key for a rendered MEP image.
+    Include anything that would change the visual output.
+    """
+    # mep_min / mep_max are tuples like (ms, val) or None
+    return (int(mep_idx), _freeze_extrema(mep_min), _freeze_extrema(mep_max))
+
+def _clear_png_cache(block: str, hemi: str) -> None:
+    key = _pc_png_cache_root_key(block, hemi)
+    st.session_state.pop(key, None)
 
 def _pc_seen_mask_key(block: str, hemi: str) -> str:
     return f"_pc_seen_mask::{block}::{hemi}"
@@ -149,6 +190,11 @@ def _autosave_prev_if_nav_changed(session_file: Path) -> None:
 
     if prev_work_key not in st.session_state:
         return
+    
+    # If block changed, clear png cache for the previous block
+    if prev["block"] != cur["block"]:
+        _clear_png_cache(block=prev_block, hemi="left")
+
 
     save_peaks_flag_list(
         session_file=session_file,
@@ -157,7 +203,6 @@ def _autosave_prev_if_nav_changed(session_file: Path) -> None:
         hemi="left",
     )
     st.toast("Auto-saved peaks_flag", icon="💾")
-
 
 def plot_fig_and_checkbox(
     t_ms: np.ndarray,
@@ -169,14 +214,10 @@ def plot_fig_and_checkbox(
     mep_min: tuple | None = None,   # (min_ms, min_val)
     mep_max: tuple | None = None,   # (max_ms, max_val)
 ) -> None:
-    """
-    Plot one MEP + checkbox.
+    mep_min_f = _freeze_extrema(mep_min)
+    mep_max_f = _freeze_extrema(mep_max)
 
-    If provided, plot stored extrema markers:
-      mep_min = (min_ms, min_val)
-      mep_max = (max_ms, max_val)
-    """
-    _1, _2, = st.columns([1,1.6])
+    _1, _2 = st.columns([1, 1.6])
     with _2:
         checked = st.checkbox(
             f"MEP {mep_idx}",
@@ -185,35 +226,43 @@ def plot_fig_and_checkbox(
         )
     updated[mep_idx] = 1 if checked else 0
 
-    fig, ax = plt.subplots()
+    # -------- PNG cache (avoid re-rendering matplotlib on reruns) --------
+    cache = _get_png_cache(block=block, hemi="left")
+    k = _png_key(mep_idx, mep_min, mep_max)
 
-    # stored extrema markers (if available)
-    if mep_min is not None:
-        min_ms, min_val = mep_min
-        if min_ms is not None and min_val is not None:
-            ax.scatter([min_ms], [min_val], marker=6, s=250)
 
-    if mep_max is not None:
-        max_ms, max_val = mep_max
-        if max_ms is not None and max_val is not None:
-            ax.scatter([max_ms], [max_val], marker=7, s=250)
+    if k not in cache:
+        fig, ax = plt.subplots()
 
-    ax.plot(t_ms, y_data)
+        # stored extrema markers (if available)
+        if mep_min is not None:
+            min_ms, min_val = mep_min
+            if min_ms is not None and min_val is not None:
+                ax.scatter([min_ms], [min_val], marker=6, s=250)
 
-    ymin, ymax = ax.get_ylim()
-    pad = 0.05 * (ymax - ymin)
-    ax.set_ylim(ymin - pad, ymax + pad)
-    ax.yaxis.set_major_locator(LinearLocator(5))
-    ax.yaxis.set_major_formatter(
-        FuncFormatter(lambda v, pos: f"{v:8.0f}")
-    )
-        
-    # ax.set_title(f"MEP {mep_idx}", )
-    ax.set_xticks([])
-    ax.margins(0)
-    # fig.tight_layout(pad=0)
-    # ax.set_position([0.22, 0.12, 0.78, 0.78])
-    st.pyplot(fig, clear_figure=True)
+        if mep_max is not None:
+            max_ms, max_val = mep_max
+            if max_ms is not None and max_val is not None:
+                ax.scatter([max_ms], [max_val], marker=7, s=250)
+
+        ax.plot(t_ms, y_data)
+
+        ymin, ymax = ax.get_ylim()
+        pad = 0.05 * (ymax - ymin)
+        ax.set_ylim(ymin - pad, ymax + pad)
+
+        ax.yaxis.set_major_locator(LinearLocator(5))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v:8.0f}"))
+
+        ax.set_xticks([])
+        ax.margins(0)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)  # IMPORTANT: don’t leak figures
+        cache[k] = buf.getvalue()
+
+    st.image(cache[k], use_container_width=True)
 
 
 
@@ -258,7 +307,7 @@ def run_step(meta: dict):
                 msg += "Blocks still incomplete:\n"
                 msg += "\n".join([f"- {b}: {seen}/{total}" for b, seen, total in incomplete])
 
-            st.error(msg)
+            st.toast(msg)
             return False
 
         return True
