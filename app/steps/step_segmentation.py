@@ -1,3 +1,5 @@
+# app/steps/step_segmentation.py
+# -*- coding: utf-8 -*-
 """
 steps/step_segmentation.py
 --------------------
@@ -5,6 +7,7 @@ Step 3: EMG segmentation
 Embeds the Bokeh viewer and writes selected ranges into the subject/session JSON.
 Defensive: hydrates missing state so deep-linking works.
 """
+
 from __future__ import annotations
 
 import threading
@@ -14,16 +17,16 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 
-from utils.persistence import (
+from app.utils.persistence import (
     ensure_metadata,
     ensure_template_loaded,
     ensure_session_file,
 )
-from bk_embedding.segmentation import start_bokeh_app
-from utils.layout import render_text, step_nav
+from app.bk_embedding.segmentation import start_bokeh_app
+from app.utils.layout import step_nav
 
-PREV_STEP = 'input'
-THIS_STEP = 'segmentation'
+PREV_STEP = "input"
+THIS_STEP = "segmentation"
 NEXT_STEP = "mep_window"
 
 
@@ -76,7 +79,6 @@ def _compute_rest_ref_from_emg_ref(seg: dict, emg: np.ndarray, fs: float) -> flo
     except Exception:
         return None
 
-    # Only take first 0.05s from emg_ref start
     t_interval = 0.05
     a = int(round(start_s * fs))
     b = int(round((start_s + t_interval) * fs))
@@ -96,7 +98,7 @@ def _std_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, rest_ref: float, 
     Uses 0.05s window ending 5 samples before pulse:
       samples = [pulse-5-0.05*fs, pulse-5)
       pre_pulse = std(abs(emg[samples]))
-      return 2 if pre_pulse > rest_ref else 0
+      return 1 if pre_pulse > rest_ref else 0
     """
     t_interval = 0.05
     end = int(pulse_idx - 5)
@@ -118,7 +120,7 @@ def _hinder_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, fs: float = 40
     Fills hinder_preactivation_flag.
     Same window:
       rest_ref = 15
-      return 3 if std(abs(pre)) > rest_ref else 0
+      return 1 if std(abs(pre)) > rest_ref else 0
     """
     rest_ref = 15
     t_interval = 0.05
@@ -136,11 +138,7 @@ def _hinder_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, fs: float = 40
     return 1 if pre_pulse > rest_ref else 0
 
 
-def compute_and_store_mep_pulses(
-    session_file: str,
-    meta: dict,
-    blocks: list[str],
-):
+def compute_and_store_mep_pulses(session_file: str, meta: dict, blocks: list[str]):
     """
     Writes pulse indices (sample indices) into:
       meps.<block>.<hemi>.pulses
@@ -149,7 +147,7 @@ def compute_and_store_mep_pulses(
 
     NOTE: min/max stay None here (computed later in MEP window / overlap step).
     """
-    from utils.tms_module import load_data
+    from app.utils.tms_module import load_data
 
     js = json.loads(Path(session_file).read_text())
     info = js.get("info") or {}
@@ -189,7 +187,6 @@ def compute_and_store_mep_pulses(
             and isinstance(seg_v[0], (list, tuple))
             and len(seg_v[0]) >= 2
         ):
-            # ensure schema exists but empty
             meps_root.setdefault(block, {})
             for h in hemis:
                 meps_root[block][h] = {
@@ -203,7 +200,6 @@ def compute_and_store_mep_pulses(
             continue
 
         seg_s, seg_e = map(float, seg_v[0])
-
         keep = (pulse_times_s >= seg_s) & (pulse_times_s <= seg_e)
         pulses = tms_indexes[keep].astype(int).tolist()
         n = len(pulses)
@@ -212,12 +208,10 @@ def compute_and_store_mep_pulses(
         for h in hemis:
             emg = np.asarray(data[_hemi_to_data_index(h)], dtype=float)
 
-            # Flags
             hinder_flags = [_hinder_muscle_activity_flag(p, emg, fs=fs) for p in pulses]
 
             rr = rest_ref_by_hemi.get(h)
             if rr is None:
-                # If no emg_ref, keep std flag at 0 (no decision)
                 std_flags = [0] * n
             else:
                 std_flags = [_std_muscle_activity_flag(p, emg, rr, fs=fs) for p in pulses]
@@ -240,14 +234,12 @@ def run_step(meta: dict):
     meta = ensure_template_loaded(meta)
     session_file = ensure_session_file(meta)
 
-    # --- Ephemeral runtime state (used by embedded Bokeh)
     if "_ranges_store" not in st.session_state:
         st.session_state["_ranges_store"] = {}
     if "_ranges_lock" not in st.session_state:
         st.session_state["_ranges_lock"] = threading.Lock()
 
     def _try_advance() -> bool:
-        # REQUIRED segmentation blocks come from template-derived exp_structure.
         required_parts = list(meta.get("exp_structure", []))
 
         missing = _segmentation_missing_flat(session_file, required_parts)
@@ -256,33 +248,26 @@ def run_step(meta: dict):
             st.session_state["_segmentation_missing"] = missing
             return False
 
-        # segmentation complete → compute pulses for MEP blocks
         mep_blocks = ["bmeps", "t0meps", "t10meps", "t20meps", "t30meps"]
         mep_blocks = [b for b in mep_blocks if b in required_parts]
 
         try:
-            compute_and_store_mep_pulses(
-                session_file=session_file,
-                meta=meta,
-                blocks=mep_blocks,
-            )
+            compute_and_store_mep_pulses(session_file=session_file, meta=meta, blocks=mep_blocks)
         except Exception as e:
             st.toast(f"Failed to compute/store MEP pulses: {e}", icon="❌")
             return False
 
         return True
 
-    # Nav bar
     step_nav(
         THIS_STEP,
-        step_title = "EMG Segmentation",
+        step_title="EMG Segmentation",
         back_step=PREV_STEP,
         next_step=NEXT_STEP,
         on_next=_try_advance,
         right_label="Advance ▶",
     )
 
-    # Show any messages requested by the callback
     if st.session_state.pop("_segmentation_incomplete", False):
         missing = st.session_state.pop("_segmentation_missing", [])
         msg = "Finish segmentation before advancing"
@@ -293,7 +278,6 @@ def run_step(meta: dict):
         except Exception:
             st.warning(msg)
 
-    # (Re)start Bokeh server if context changes (prevents stale ports)
     bokeh_key = (
         session_file,
         meta.get("input_file"),
@@ -312,7 +296,6 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-    # Hide horizontal overflow globally + in the iframe wrapper
     st.markdown(
         """
         <style>

@@ -1,3 +1,5 @@
+# app/steps/step_peakChecking.py
+# -*- coding: utf-8 -*-
 """
 steps/step_peakChecking.py
 --------------------------
@@ -15,28 +17,28 @@ from __future__ import annotations
 
 from pathlib import Path
 from math import ceil
+import io
 
 import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LinearLocator, FuncFormatter
 
-
-
-from utils.persistence import (
+from app.utils.persistence import (
     ensure_metadata,
     ensure_template_loaded,
     ensure_session_file,
 )
-from utils.layout import render_text, step_nav
-from utils.tms_module import (
+from app.utils.layout import step_nav
+from app.utils.tms_module import (
     load_meps_for_block,
     Epoch,
     read_json,
     get_epoch_from_session,
     get_peaks_flag_list,
-    save_peaks_flag_list,  # <-- your function: (session_file, block, flags, hemi)
+    save_peaks_flag_list,
 )
+
 
 plt.rcParams.update({
     # Fonts

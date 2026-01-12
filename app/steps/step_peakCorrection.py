@@ -1,3 +1,5 @@
+# app/steps/step_peakCorrection.py
+# -*- coding: utf-8 -*-
 """
 steps/step_peakCorrection.py
 -----------------------------
@@ -9,13 +11,6 @@ Step 6: Peak correction (with draggable points via embedded Dash)
 - Streamlit rebuilds the queue automatically from session JSON on every rerun
 - Streamlit tracks which flagged MEPs have already been reviewed (visited) so they
   do NOT reappear even if the queue is rebuilt.
-
-Notes:
-- This step does NOT modify peaks_flag (or any other flags).
-- "Finish ✅" (top-right) is enabled only when the remaining queue is empty
-  OR when you're on the last remaining item (depending on the logic below).
-  Here: enabled only when you're on the last remaining item.
-- On Finish: update processed_sessions.json + show flash on Step 1 + jump to input.
 """
 
 from __future__ import annotations
@@ -28,24 +23,21 @@ import urllib.parse
 
 import streamlit as st
 
-from utils.dash_peak_editor import create_dash_peak_editor, SHOW_DEBUG
-from utils.persistence import (
+from app.utils.dash_peak_editor import create_dash_peak_editor, SHOW_DEBUG
+from app.utils.persistence import (
     ensure_metadata,
     ensure_template_loaded,
     ensure_session_file,
     update_processed_sessions_registry,
 )
-from utils.layout import render_text, step_nav
-from utils.tms_module import read_json
+from app.utils.layout import render_text, step_nav
+from app.utils.tms_module import read_json
 
 PREV_STEP = "peak_checking"
 THIS_STEP = "peak_correction"
 NEXT_STEP = None
 
 
-# -------------------------
-# Queue item
-# -------------------------
 @dataclass(frozen=True)
 class MEPKey:
     block: str
@@ -53,9 +45,6 @@ class MEPKey:
     mep_idx: int
 
 
-# -------------------------
-# Dash boot helpers
-# -------------------------
 def _find_free_port() -> int:
     s = socket.socket()
     s.bind(("", 0))
@@ -66,6 +55,7 @@ def _find_free_port() -> int:
 
 class _StripFrameHeadersMiddleware:
     """Strip frame-blocking headers from Dash responses (local embedding)."""
+
     def __init__(self, app):
         self.app = app
 
@@ -79,13 +69,25 @@ class _StripFrameHeadersMiddleware:
 
 
 def _dash_code_sig(meta: dict) -> float:
-    """Restart Dash when utils/dash_peak_editor.py changes."""
-    base = Path(meta.get("_script_dir", "."))
-    p = (base / "utils" / "dash_peak_editor.py").resolve()
-    try:
-        return float(p.stat().st_mtime)
-    except Exception:
-        return 0.0
+    """
+    Restart Dash when dash_peak_editor.py changes.
+    Robust to both layouts:
+      - <repo>/app/utils/dash_peak_editor.py   (new)
+      - <repo>/utils/dash_peak_editor.py       (legacy)
+    """
+    base = Path(meta.get("_script_dir", ".")).resolve()
+
+    candidates = [
+        (base / "app" / "utils" / "dash_peak_editor.py"),
+        (base / "utils" / "dash_peak_editor.py"),
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return float(p.stat().st_mtime)
+        except Exception:
+            pass
+    return 0.0
 
 
 def _ensure_dash_running(meta: dict, session_file: str | Path) -> int:
@@ -143,9 +145,6 @@ def _dash_url(port: int, *, block: str, hemi: str, mep_idx: int) -> str:
     return f"{scheme}://{host}:{int(port)}/?{qs}"
 
 
-# -------------------------
-# Session JSON helpers (queue only)
-# -------------------------
 def _ensure_payload_lists(payload: dict) -> None:
     pulses = payload.get("pulses", [])
     n = len(pulses) if isinstance(pulses, list) else 0
@@ -176,7 +175,6 @@ def _get_payload(session: dict, block: str, hemi: str) -> dict:
 
 
 def _build_queue(session: dict, blocks: list[str], hemis: list[str]) -> list[MEPKey]:
-    """Build queue across ALL hemispheres and blocks: include items where peaks_flag[i] == 1."""
     out: list[MEPKey] = []
     for b in blocks:
         for h in hemis:
@@ -191,15 +189,12 @@ def _build_queue(session: dict, blocks: list[str], hemis: list[str]) -> list[MEP
     return out
 
 
-# -------------------------
-# Visited tracking
-# -------------------------
 def _visited_key() -> str:
-    return "_pcorr_visited"  # set[str] of "block|hemi|idx"
+    return "_pcorr_visited"
 
 
 def _current_key() -> str:
-    return "_pcorr_current"  # "block|hemi|idx" or ""
+    return "_pcorr_current"
 
 
 def _key_str(k: MEPKey) -> str:
@@ -216,13 +211,9 @@ def _parse_key_str(s: str) -> MEPKey | None:
 
 def _remaining_queue(session: dict, blocks: list[str], hemis: list[str], visited: set[str]) -> list[MEPKey]:
     fresh = _build_queue(session, blocks=blocks, hemis=hemis)
-    # Filter out already visited
     return [k for k in fresh if _key_str(k) not in visited]
 
 
-# -------------------------
-# Finish logic
-# -------------------------
 def _finish_to_input(meta: dict, session_file: Path) -> None:
     update_processed_sessions_registry(
         output_dir=meta.get("output_dir") or session_file.parent,
@@ -237,20 +228,15 @@ def _finish_to_input(meta: dict, session_file: Path) -> None:
     st.rerun()
 
 
-# -------------------------
-# Step
-# -------------------------
 def run_step(meta: dict):
     meta = ensure_metadata()
     meta = ensure_template_loaded(meta)
     session_file = Path(ensure_session_file(meta))
 
-    # Init visited/current
     if _visited_key() not in st.session_state:
         st.session_state[_visited_key()] = set()
     visited: set[str] = st.session_state[_visited_key()]
 
-    # Read session once per rerun (queue is rebuilt from this)
     session = read_json(session_file)
 
     blocks = [b for b in (meta.get("exp_structure", []) or []) if str(b).lower().endswith("meps")]
@@ -262,7 +248,6 @@ def run_step(meta: dict):
     if not hemis:
         hemis = ["left"]
 
-    # Rebuild remaining queue every run (and filter visited)
     remaining = _remaining_queue(
         session,
         blocks=[str(b) for b in blocks],
@@ -270,21 +255,19 @@ def run_step(meta: dict):
         visited=visited,
     )
 
-    # If nothing left, enable Finish immediately
     if not remaining:
         step_nav(
             THIS_STEP,
             step_title="Peak Correction",
             right_label="Finish ✅",
-            next_step=NEXT_STEP,          # None
+            next_step=NEXT_STEP,
             back_step=PREV_STEP,
-            disabled_next=False,          # enabled
+            disabled_next=False,
             on_next=(lambda: _finish_to_input(meta, session_file)),
         )
         st.success("No remaining flagged MEPs to correct.")
         return
 
-    # Pick current item (keep it if still present in remaining)
     cur_s = st.session_state.get(_current_key(), "") or ""
     cur = _parse_key_str(cur_s)
 
@@ -293,17 +276,15 @@ def run_step(meta: dict):
         cur = remaining[0]
         st.session_state[_current_key()] = _key_str(cur)
 
-    # Position of current in remaining
     pos = next((i for i, k in enumerate(remaining) if _key_str(k) == _key_str(cur)), 0)
     key = remaining[pos]
     is_last = (pos >= len(remaining) - 1)
 
-    # Top nav: Finish enabled only on last remaining item
     step_nav(
         THIS_STEP,
         step_title="Peak Correction",
         right_label="Finish ✅",
-        next_step=NEXT_STEP,              # None
+        next_step=NEXT_STEP,
         back_step=PREV_STEP,
         disabled_next=(not is_last),
         on_next=(lambda: _finish_to_input(meta, session_file)) if is_last else None,
@@ -316,14 +297,12 @@ def run_step(meta: dict):
         heading_level=3,
     )
 
-    # --- Draggable editor (Dash) ---
     port = _ensure_dash_running(meta, session_file)
     dash_url = _dash_url(port, block=key.block, hemi=key.hemi, mep_idx=key.mep_idx)
 
     if SHOW_DEBUG:
         st.link_button("Open Dash directly", dash_url, use_container_width=True)
 
-    # --- Centered, responsive, non-scrollable iframe ---
     st.markdown(
         """
         <style>
@@ -359,7 +338,6 @@ def run_step(meta: dict):
         unsafe_allow_html=True,
     )
 
-    # --- Navigation ---
     b1, b2, b3 = st.columns([1, 1, 1])
 
     with b1:
@@ -376,12 +354,10 @@ def run_step(meta: dict):
         )
 
     with b3:
-        # "Next" marks current as visited so it won't reappear even if queue rebuilds
         if st.button("Next ▶", use_container_width=True, disabled=is_last):
             visited.add(_key_str(key))
             st.session_state[_visited_key()] = visited
 
-            # Recompute remaining after marking visited
             session2 = read_json(session_file)
             remaining2 = _remaining_queue(
                 session2,
@@ -391,11 +367,9 @@ def run_step(meta: dict):
             )
 
             if not remaining2:
-                # Nothing left → allow Finish
                 st.session_state[_current_key()] = ""
                 st.rerun()
 
-            # keep same forward-ish position (clamped)
             next_pos = min(pos, len(remaining2) - 1)
             st.session_state[_current_key()] = _key_str(remaining2[next_pos])
             st.rerun()

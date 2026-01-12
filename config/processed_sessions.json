@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "processed": [
+    {
+      "data_file": "example_data.bin",
+      "session_file": "sub-example_sub_ses-1.json",
+      "finished_at": "2026-01-12T13:52:36.001274Z",
+      "researcher_id": "FFV",
+      "pipeline_version": "1"
+    }
+  ]
+}

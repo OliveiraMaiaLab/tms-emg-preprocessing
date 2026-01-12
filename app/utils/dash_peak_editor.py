@@ -1,7 +1,13 @@
+# app/utils/dash_peak_editor.py
 """
 dash_peak_editor.py
---------------
-...
+-------------------
+Embedded Dash editor for min/max peak correction.
+
+- Reads current MEP waveform (from session pulses + raw data)
+- Shows draggable vertical cursors (min/max)
+- Auto-writes updated min/max to session JSON on drag (no explicit save needed)
+- Optional "Save min/max" button remains as a manual action (still useful)
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output, State, no_update
 
-from utils.tms_module import (
+from app.utils.tms_module import (
     load_meps_for_block,
     read_json,
     write_json,
@@ -25,7 +31,7 @@ from utils.tms_module import (
 # -------------------------
 # Config
 # -------------------------
-SHOW_DEBUG = False  # ✅ hide debug box
+SHOW_DEBUG = False
 
 
 # -------------------------
@@ -120,7 +126,7 @@ def _cursor_shapes(x_min: float, x_max: float) -> list[dict]:
     IMPORTANT: These must be shapes[0] and shapes[1] in layout.shapes
     so that relayoutData parsing stays stable.
     """
-    def _one(x, name):
+    def _one(x):
         return dict(
             type="line",
             x0=float(x),
@@ -130,28 +136,33 @@ def _cursor_shapes(x_min: float, x_max: float) -> list[dict]:
             xref="x",
             yref="paper",
             line=dict(width=2, dash="solid"),
-            name=name,  # FYI: Plotly does not use this for relayout keys
             layer="above",
         )
-    return [_one(x_min, "min"), _one(x_max, "max")]
+
+    return [_one(x_min), _one(x_max)]
 
 
 def _epoch_shapes(epoch) -> list[dict]:
-    """Epoch bounds as shapes (thin, clipped, don't affect autoscale)."""
     return [
         dict(
             type="line",
-            x0=float(epoch.tmin_ms), x1=float(epoch.tmin_ms),
-            y0=-0.05, y1=1.05,
-            xref="x", yref="paper",
+            x0=float(epoch.tmin_ms),
+            x1=float(epoch.tmin_ms),
+            y0=-0.05,
+            y1=1.05,
+            xref="x",
+            yref="paper",
             line=dict(width=1, dash="dash"),
             layer="above",
         ),
         dict(
             type="line",
-            x0=float(epoch.tmax_ms), x1=float(epoch.tmax_ms),
-            y0=-0.05, y1=1.05,
-            xref="x", yref="paper",
+            x0=float(epoch.tmax_ms),
+            x1=float(epoch.tmax_ms),
+            y0=-0.05,
+            y1=1.05,
+            xref="x",
+            yref="paper",
             line=dict(width=1, dash="dash"),
             layer="above",
         ),
@@ -159,7 +170,6 @@ def _epoch_shapes(epoch) -> list[dict]:
 
 
 def _trace_ylim(y: np.ndarray) -> tuple[float, float]:
-    """Compute a nice y-limits around the trace so user can't pan but it still fits."""
     ymin = float(np.nanmin(y))
     ymax = float(np.nanmax(y))
     if not np.isfinite(ymin) or not np.isfinite(ymax) or ymin == ymax:
@@ -173,41 +183,43 @@ def _trace_ylim(y: np.ndarray) -> tuple[float, float]:
 def make_figure(t_ms: np.ndarray, y: np.ndarray, points: dict, epoch, title: str) -> go.Figure:
     x0 = float(points["x"][0])
     x1 = float(points["x"][1])
-
     ylo, yhi = _trace_ylim(y)
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(
-        x=t_ms, y=y,
-        mode="lines",
-        name="MEP",
-        hoverinfo="skip",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=t_ms,
+            y=y,
+            mode="lines",
+            name="MEP",
+            hoverinfo="skip",
+        )
+    )
 
-    # Visual markers (NOT draggable) that we update in the callback
-    fig.add_trace(go.Scatter(
-        x=[x0, x1],
-        y=[float(points["y"][0]), float(points["y"][1])],
-        mode="markers",
-        name="Min/Max",
-        marker=dict(size=16),
-        hoverinfo="skip",
-    ))
+    # visible markers (not draggable)
+    fig.add_trace(
+        go.Scatter(
+            x=[x0, x1],
+            y=[float(points["y"][0]), float(points["y"][1])],
+            mode="markers",
+            name="Min/Max",
+            marker=dict(size=16),
+            hoverinfo="skip",
+        )
+    )
 
-    # IMPORTANT: cursors FIRST so they are shapes[0] and shapes[1]
     shapes = _cursor_shapes(x0, x1) + _epoch_shapes(epoch)
 
     fig.update_layout(
         title=title,
         margin=dict(l=40, r=20, t=60, b=40),
         uirevision="keep-zoom",
-        dragmode="pan",   # fine: axes are fixedrange so pan won't move anything
+        dragmode="pan",
         shapes=shapes,
         hovermode=False,
     )
 
-    # Lock axes so user cannot pan/zoom (but we still auto-fit y ourselves)
     fig.update_xaxes(title="Time (ms)", fixedrange=True)
     fig.update_yaxes(title="EMG (uV)", fixedrange=True, range=[ylo, yhi])
 
@@ -215,13 +227,6 @@ def make_figure(t_ms: np.ndarray, y: np.ndarray, points: dict, epoch, title: str
 
 
 def _extract_cursor_x_from_relayout(relayout: dict, fallback_points: dict) -> tuple[float, float] | None:
-    """
-    Dragging shapes emits relayoutData like:
-      {'shapes[0].x0': 12.3, 'shapes[0].x1': 12.3, ...}
-      {'shapes[1].x0': 34.5, 'shapes[1].x1': 34.5, ...}
-
-    We rely on cursor shapes being shapes[0] and shapes[1].
-    """
     if not relayout:
         return None
 
@@ -245,7 +250,6 @@ def _extract_cursor_x_from_relayout(relayout: dict, fallback_points: dict) -> tu
         prev1 = float(fallback_points["x"][1])
         return (x0 if x0 is not None else prev0, x1 if x1 is not None else prev1)
 
-    # Sometimes Plotly sends a full shapes array replacement
     if "shapes" in relayout and isinstance(relayout["shapes"], list) and len(relayout["shapes"]) >= 2:
         try:
             s0 = relayout["shapes"][0]
@@ -276,11 +280,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         {%favicon%}
         {%css%}
         <style>
-        html, body {
-            height: 100%;
-            margin: 0;
-            overflow: hidden;  /* crucial: no scrollbars inside iframe */
-        }
+        html, body { height: 100%; margin: 0; overflow: hidden; }
         </style>
     </head>
     <body>
@@ -302,13 +302,6 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
     def _serve_layout():
         ctx, dbg_lines = _ctx_from_request()
 
-        dbg_lines.extend([
-            f"session_file={session_file}",
-            f"meta.input_file={meta.get('input_file')}",
-            f"meta.channels={meta.get('channels')}",
-            f"meta.sampling_rate={meta.get('sampling_rate')}",
-        ])
-
         fig = _error_figure("Loading...")
         points = {"x": [], "y": []}
         ctx_store = {}
@@ -316,8 +309,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         if not ctx:
             fig = _error_figure(
                 "Missing query params.\n"
-                "Expected: ?block=<name>&hemi=<left/right>&mep=<index>\n\n"
-                "If you opened a URL with params but ctx is empty, the Referer header might be stripped."
+                "Expected: ?block=<name>&hemi=<left/right>&mep=<index>"
             )
         else:
             try:
@@ -325,16 +317,13 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
                 epoch = get_epoch_from_session(session)
 
                 meps_root = session.get("meps", {}) or {}
-                dbg_lines.append(f"available_blocks={list(meps_root.keys())}")
-
                 block = str(ctx["block"])
                 hemi = str(ctx["hemi"])
                 i = int(ctx["mep_idx"])
 
-                payload = (((meps_root.get(block) or {}).get(hemi) or {}) if isinstance(meps_root.get(block), dict) else {})
-                pulses = payload.get("pulses", [])
-                dbg_lines.append(f"payload_keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}")
-                dbg_lines.append(f"pulses_len={len(pulses) if isinstance(pulses, list) else 'not_list'}")
+                payload = ((meps_root.get(block) or {}).get(hemi) or {})
+                mins = payload.get("min", []) if isinstance(payload, dict) else []
+                maxs = payload.get("max", []) if isinstance(payload, dict) else []
 
                 t_ms, meps = load_meps_for_block(
                     meta,
@@ -345,23 +334,26 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
                     detrend=False,
                 )
 
-                dbg_lines.append(f"t_ms.shape={getattr(t_ms, 'shape', None)} dtype={getattr(t_ms, 'dtype', None)}")
-                dbg_lines.append(f"meps.shape={getattr(meps, 'shape', None)} dtype={getattr(meps, 'dtype', None)}")
-
-                if not isinstance(meps, np.ndarray) or meps.ndim != 2 or meps.shape[0] == 0 or meps.shape[1] == 0:
-                    fig = _error_figure("No MEP data returned.\nLikely pulses empty or block/hemi mismatch.")
+                if not isinstance(meps, np.ndarray) or meps.ndim != 2 or meps.size == 0:
+                    fig = _error_figure("No MEP data returned (empty pulses or mismatch).")
                 elif i < 0 or i >= meps.shape[0]:
                     fig = _error_figure(f"MEP index out of range: {i} (n={meps.shape[0]})")
                 else:
                     y = meps[i, :]
 
-                    mins = payload.get("min", []) if isinstance(payload, dict) else []
-                    maxs = payload.get("max", []) if isinstance(payload, dict) else []
                     stored_min = mins[i] if isinstance(mins, list) and i < len(mins) else None
                     stored_max = maxs[i] if isinstance(maxs, list) and i < len(maxs) else None
 
-                    x0 = float(stored_min[0]) if isinstance(stored_min, (list, tuple)) and len(stored_min) == 2 and stored_min[0] is not None else float(epoch.tmin_ms)
-                    x1 = float(stored_max[0]) if isinstance(stored_max, (list, tuple)) and len(stored_max) == 2 and stored_max[0] is not None else float(epoch.tmax_ms)
+                    x0 = (
+                        float(stored_min[0])
+                        if isinstance(stored_min, (list, tuple)) and len(stored_min) == 2 and stored_min[0] is not None
+                        else float(epoch.tmin_ms)
+                    )
+                    x1 = (
+                        float(stored_max[0])
+                        if isinstance(stored_max, (list, tuple)) and len(stored_max) == 2 and stored_max[0] is not None
+                        else float(epoch.tmax_ms)
+                    )
 
                     points = {"x": [x0, x1], "y": [_interp_y(x0, t_ms, y), _interp_y(x1, t_ms, y)]}
                     fig = make_figure(t_ms, y, points, epoch, f"{block} / {hemi} / MEP {i}")
@@ -376,42 +368,37 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
             dcc.Store(id="points-store", data=points),
         ]
 
-        # ✅ Debug box removed unless explicitly enabled
         if SHOW_DEBUG:
-            children.append(
-                html.Pre(
-                    id="debug",
-                    children="\n".join(dbg_lines),
-                    style={**_debug_style(), "maxHeight": "120px", "overflow": "hidden"},
-                )
-            )
+            children.append(html.Pre("\n".join(dbg_lines), style=_debug_style()))
 
-        children.extend([
-            dcc.Graph(
-                id="graph",
-                figure=fig,
-                config={
-                    "displayModeBar": False,
-                    "displaylogo": False,
-                    "scrollZoom": False,
-                    "doubleClick": False,
-                    "showTips": False,
-                    "edits": {"shapePosition": True},
-                },
-                style={"flex": "1 1 auto", "height": "100%", "minHeight": "0"},
-            ),
-            html.Div(
-                style={"display": "flex", "gap": "12px", "alignItems": "center"},
-                children=[
-                    html.Button("Save min/max", id="save-btn"),
-                    html.Div(id="status", style={"whiteSpace": "pre-wrap"}),
-                ],
-            ),
-        ])
+        children.extend(
+            [
+                dcc.Graph(
+                    id="graph",
+                    figure=fig,
+                    config={
+                        "displayModeBar": False,
+                        "displaylogo": False,
+                        "scrollZoom": False,
+                        "doubleClick": False,
+                        "showTips": False,
+                        "edits": {"shapePosition": True},
+                    },
+                    style={"flex": "1 1 auto", "height": "100%", "minHeight": "0"},
+                ),
+                html.Div(
+                    style={"display": "flex", "gap": "12px", "alignItems": "center"},
+                    children=[
+                        html.Button("Save min/max", id="save-btn"),
+                        html.Div(id="status", style={"whiteSpace": "pre-wrap"}),
+                    ],
+                ),
+            ]
+        )
 
         return html.Div(
             style={
-                "height": "100vh",            # fill iframe
+                "height": "100vh",
                 "width": "100vw",
                 "margin": "0",
                 "padding": "10px",
@@ -419,7 +406,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
                 "display": "flex",
                 "flexDirection": "column",
                 "gap": "10px",
-                "overflow": "hidden",         # no internal scroll
+                "overflow": "hidden",
             },
             children=children,
         )
@@ -453,17 +440,16 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
             epoch=epoch,
             detrend=False,
         )
-        y = meps[int(ctx["mep_idx"]), :]
+
+        i = int(ctx["mep_idx"])
+        y = meps[i, :]
 
         x0, x1 = float(new_xs[0]), float(new_xs[1])
         new_points = {"x": [x0, x1], "y": [_interp_y(x0, t_ms, y), _interp_y(x1, t_ms, y)]}
 
-        # -------------------------
-        # ✅ AUTO-SAVE to session JSON
-        # -------------------------
+        # AUTO-SAVE min/max to session JSON
         block = str(ctx["block"])
         hemi = str(ctx["hemi"])
-        i = int(ctx["mep_idx"])
 
         session.setdefault("meps", {}).setdefault(block, {}).setdefault(hemi, {})
         payload = session["meps"][block][hemi]
@@ -471,7 +457,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         pulses = payload.get("pulses", [])
         n_p = len(pulses) if isinstance(pulses, list) else (i + 1)
 
-        for k, fill in (("min", None), ("max", None), ("peaks_flag", 0)):
+        for k, fill in (("min", None), ("max", None)):
             if not isinstance(payload.get(k), list):
                 payload[k] = []
             if len(payload[k]) < n_p:
@@ -482,17 +468,9 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
 
         session["meps"][block][hemi] = payload
         write_json(session_file, session)
-        # -------------------------
 
-        fig = make_figure(
-            t_ms,
-            y,
-            new_points,
-            epoch,
-            f"{block} / {hemi} / MEP {i}",
-        )
+        fig = make_figure(t_ms, y, new_points, epoch, f"{block} / {hemi} / MEP {i}")
         return new_points, fig
-
 
     @app.callback(
         Output("status", "children"),
@@ -501,7 +479,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         State("ctx-store", "data"),
         prevent_initial_call=True,
     )
-    def save(n, points, ctx):
+    def save(_n, points, ctx):
         if not ctx or not points or len(points.get("x", [])) < 2:
             return "Nothing to save."
 
@@ -516,7 +494,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         pulses = payload.get("pulses", [])
         n_p = len(pulses) if isinstance(pulses, list) else (i + 1)
 
-        for k, fill in (("min", None), ("max", None), ("peaks_flag", 0)):
+        for k, fill in (("min", None), ("max", None)):
             if not isinstance(payload.get(k), list):
                 payload[k] = []
             if len(payload[k]) < n_p:

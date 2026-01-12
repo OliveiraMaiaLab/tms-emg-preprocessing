@@ -1,6 +1,8 @@
+# app/bk_embedding/mepOverlap.py
+# -*- coding: utf-8 -*-
 """
-bk_embedding/mepOverlap.py
--------------------------
+app/bk_embedding/mepOverlap.py
+------------------------------
 Embedded Bokeh server (single plot only).
 
 - Reads pulses from session_file["meps"][block]["left"]["pulses"] (sample indices)
@@ -8,9 +10,13 @@ Embedded Bokeh server (single plot only).
 - RangeTool highlights a selectable window without moving the plot.
 """
 
+from __future__ import annotations
+
 import time
 import threading
 import json
+from typing import Callable
+
 import numpy as np
 
 from bokeh.server.server import Server
@@ -25,12 +31,26 @@ from bokeh.models import (
     Div,
 )
 
-from utils.tms_module import load_data
+from app.utils.tms_module import load_data
 
 
-def _read_pulses(session_file: str, exp_structure: list[str] | None, hemi: str = "left") -> list[int]:
-    with open(session_file, "r") as f:
-        js = json.load(f)
+def _read_pulses(
+    session_file: str,
+    exp_structure: list[str] | None,
+    hemi: str = "left",
+) -> list[int]:
+    """
+    Collect pulses across all blocks that end with "meps" (case-insensitive),
+    falling back to all blocks present in session JSON if exp_structure doesn't contain any.
+
+    Expected schema:
+      session["meps"][block][hemi]["pulses"] = [sample_idx, ...]
+    """
+    try:
+        with open(session_file, "r") as f:
+            js = json.load(f)
+    except Exception:
+        return []
 
     meps = js.get("meps") or {}
     if not isinstance(meps, dict):
@@ -45,17 +65,18 @@ def _read_pulses(session_file: str, exp_structure: list[str] | None, hemi: str =
         hemi_payload = (meps.get(b) or {}).get(hemi, {})
         if not isinstance(hemi_payload, dict):
             continue
+
         pulses = hemi_payload.get("pulses", [])
         if not isinstance(pulses, list):
             continue
+
         for p in pulses:
             try:
                 out.append(int(p))
             except Exception:
                 pass
 
-    out = sorted(set(out))
-    return out
+    return sorted(set(out))
 
 
 def _extract_epochs_from_pulses(
@@ -66,6 +87,11 @@ def _extract_epochs_from_pulses(
     post_s: float = 0.400,
     channel_index: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Returns:
+      t_sec: (n_win,) time vector centered at pulse (0 at pulse)
+      trials: (n_trials, n_win) epochs
+    """
     data = np.asarray(data)
     if data.ndim != 2:
         raise ValueError("Expected data shape (n_channels, n_samples).")
@@ -93,11 +119,21 @@ def _extract_epochs_from_pulses(
         raise RuntimeError("No epochs extracted (empty/clipped pulses).")
 
     trials = np.asarray(trials, dtype=float)
+
+    # baseline subtract each trial using pre-pulse window
     trials -= trials[:, :pre_n].mean(axis=1, keepdims=True)
     return t_sec, trials
 
 
-def _make_plot(t_sec: np.ndarray, trials: np.ndarray, range_sink=None):
+def _make_plot(
+    t_sec: np.ndarray,
+    trials: np.ndarray,
+    range_sink: Callable[[float, float], None] | None = None,
+):
+    """
+    Build overlay plot + mean, with a RangeTool selection.
+    range_sink(start_s, end_s) receives selection in seconds.
+    """
     plot_xlims_ms = [-10, 60]
     default_sel_ms = [15, 35]
 
@@ -120,10 +156,26 @@ def _make_plot(t_sec: np.ndarray, trials: np.ndarray, range_sink=None):
     p.title.align = "center"
 
     # TMS pulse marker
-    p.add_layout(Span(location=0.0, dimension="height", line_color="black", line_width=1,
-                      line_alpha=0.5, line_dash="dashed"))
-    p.line([np.nan, np.nan], [np.nan, np.nan], line_color="black", line_width=1,
-           line_alpha=0.5, line_dash="dashed", legend_label="TMS pulse")
+    p.add_layout(
+        Span(
+            location=0.0,
+            dimension="height",
+            line_color="black",
+            line_width=1,
+            line_alpha=0.5,
+            line_dash="dashed",
+        )
+    )
+    # legend entry hack (Bokeh doesn't legend Spans)
+    p.line(
+        [np.nan, np.nan],
+        [np.nan, np.nan],
+        line_color="black",
+        line_width=1,
+        line_alpha=0.5,
+        line_dash="dashed",
+        legend_label="TMS pulse",
+    )
 
     # overlays
     for k in range(trials_mv.shape[0]):
@@ -164,6 +216,13 @@ def _make_plot(t_sec: np.ndarray, trials: np.ndarray, range_sink=None):
 
 
 def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_store, ranges_lock):
+    """
+    Launch a Bokeh app in a background thread; return the chosen port.
+
+    ranges_store is updated via sink:
+      ranges_store["epoch_window"] = (start_s, end_s)
+    """
+
     def bkapp(doc):
         fs = float(meta["sampling_rate"])
         pulses = _read_pulses(session_file, exp_structure, hemi="left")
@@ -172,6 +231,7 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
             return
 
         data, _tms = load_data(meta["input_file"], channels=meta.get("channels"))
+
         try:
             t_sec, trials = _extract_epochs_from_pulses(
                 data=data,
@@ -185,15 +245,15 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
             doc.add_root(Div(text=f"<b>Failed to extract epochs:</b> {e}", style={"color": "crimson"}))
             return
 
-        def sink(start_s, end_s):
+        def sink(start_s: float, end_s: float):
             with ranges_lock:
                 ranges_store["epoch_window"] = (start_s, end_s)
 
         doc.add_root(_make_plot(t_sec, trials, range_sink=sink))
 
-    port_holder = []
+    port_holder: list[int] = []
 
-    def run_server(holder):
+    def run_server(holder: list[int]):
         server = Server(
             {"/bkapp": bkapp},
             port=0,
@@ -207,6 +267,8 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
 
     t = threading.Thread(target=run_server, args=(port_holder,), daemon=True)
     t.start()
+
     while not port_holder:
         time.sleep(0.1)
+
     return port_holder[0]

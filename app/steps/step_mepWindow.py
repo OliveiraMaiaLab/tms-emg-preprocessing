@@ -1,3 +1,5 @@
+# app/steps/step_mepWindow.py
+# -*- coding: utf-8 -*-
 """
 steps/step_mepWindow.py
 -----------------
@@ -10,25 +12,28 @@ Then computes per-block min/max within that window:
   session["meps"][block][hemi]["min"/"max"] lists
 """
 
+from __future__ import annotations
+
 import threading
-import streamlit as st
 import json
 from pathlib import Path
-import numpy as np
-from scipy.signal import find_peaks
 from math import ceil
 
-from utils.persistence import (
+import numpy as np
+import streamlit as st
+from scipy.signal import find_peaks
+
+from app.utils.persistence import (
     ensure_metadata,
     ensure_template_loaded,
     ensure_session_file,
 )
-from utils.layout import render_text, step_nav
-from bk_embedding.mepOverlap import start_bokeh_app
-from utils.tms_module import load_data, read_json, get_epoch_from_session
+from app.utils.layout import step_nav
+from app.bk_embedding.mepOverlap import start_bokeh_app
+from app.utils.tms_module import load_data, read_json, get_epoch_from_session
 
-PREV_STEP = 'segmentation'
-THIS_STEP = 'mep_window'
+PREV_STEP = "segmentation"
+THIS_STEP = "mep_window"
 NEXT_STEP = "peak_checking"
 
 
@@ -41,6 +46,7 @@ def save_mep_window_to_session(session_file: str, window_s: tuple[float, float])
     js["mep_window"] = [beg, end]
     Path(session_file).write_text(json.dumps(js, indent=2))
 
+
 def _best_peak_idx_and_val(x: np.ndarray, pk_width: int | None, distance: int) -> tuple[int, float]:
     """
     Return (idx, value) for the most prominent peak in x.
@@ -50,11 +56,10 @@ def _best_peak_idx_and_val(x: np.ndarray, pk_width: int | None, distance: int) -
     if pk_width is not None and pk_width > 0:
         kwargs["width"] = pk_width
 
-    peaks, props = find_peaks(x, **kwargs, prominence=0)  # one call
+    peaks, props = find_peaks(x, **kwargs, prominence=0)
     if peaks.size == 0:
         return 0, float(x[0])
 
-    # Choose the most prominent peak (robust if >1 slips through)
     prom = props.get("prominences")
     best_j = int(np.argmax(prom)) if prom is not None and len(prom) else 0
     idx = int(peaks[best_j])
@@ -66,19 +71,15 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
     Uses:
       - session["meps"][block][hemi]["pulses"] (sample indices)
       - epoch window from session (same source as step_peakChecking)
-        (i.e., via get_epoch_from_session(session))
 
     Computes:
       - min/max inside [epoch.tmin_ms, epoch.tmax_ms] relative to pulse
-        (converts ms -> samples using fs)
     """
-    # --- load session + epoch exactly like step_peakChecking ---
     js = read_json(Path(session_file))
     epoch = get_epoch_from_session(js)
 
     fs = float(meta["sampling_rate"])
 
-    # Load full raw data once
     data, _tms = load_data(meta["input_file"], channels=meta.get("channels"))
     hemis = list(meta.get("hemispheres", ["left"]))
 
@@ -88,11 +89,6 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
     if not isinstance(meps_root, dict):
         return
 
-    # baseline-correct using pre-stim [-100ms, 0]
-    pre_s = 0.100
-    pre_n = int(round(pre_s * fs))
-
-    # epoch bounds in *samples* (epoch is in ms relative to pulse)
     a_off = int(round((epoch.tmin_ms / 1000.0) * fs))
     b_off = int(round((epoch.tmax_ms / 1000.0) * fs))
     if a_off >= b_off:
@@ -116,12 +112,10 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
             ch = hemi_to_ch.get(hemi, 0)
             sig = data[ch, :]
 
-            # find peaks
-            pk_width = ceil(fs*0.001)
+            pk_width = ceil(fs * 0.001)
 
             mins, maxs = [], []
             mep_start = float(epoch.tmin_ms)
-            dist = None  # set per MEP (depends on length)
 
             for p in pulses:
                 p = int(p)
@@ -138,7 +132,7 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
 
                 max_i, max_val = _best_peak_idx_and_val(mep, pk_width=pk_width, distance=dist)
                 min_i, min_val = _best_peak_idx_and_val(-mep, pk_width=pk_width, distance=dist)
-                min_val = -min_val  # because we ran on -mep
+                min_val = -min_val
 
                 max_ms = (max_i * 1000.0 / fs) + mep_start
                 min_ms = (min_i * 1000.0 / fs) + mep_start
@@ -149,9 +143,6 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
             hp["min"] = mins
             hp["max"] = maxs
 
-
-
-            # keep lists aligned if flags not present
             n = len(pulses)
             hp.setdefault("preactivation_flag", [0] * n)
             hp.setdefault("peaks_flag", [0] * n)
@@ -168,13 +159,11 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
     Path(session_file).write_text(json.dumps(js, indent=2))
 
 
-
 def run_step(meta: dict):
     meta = ensure_metadata()
     meta = ensure_template_loaded(meta)
     session_file = ensure_session_file(meta)
 
-    # --- Ephemeral runtime state (must exist BEFORE step_nav on_next runs)
     if "_ranges_store" not in st.session_state:
         st.session_state["_ranges_store"] = {}
     if "_ranges_lock" not in st.session_state:
@@ -199,15 +188,13 @@ def run_step(meta: dict):
 
     step_nav(
         THIS_STEP,
-        step_title = "MEP window definition",
+        step_title="MEP window definition",
         back_step=PREV_STEP,
         next_step=NEXT_STEP,
         on_next=_on_next,
         disabled_next=False,
     )
 
-
-    # Restart Bokeh if context changes
     bokeh_key = (session_file, meta.get("input_file"), meta.get("sampling_rate"))
     if st.session_state.get("_bokeh_key") != bokeh_key:
         st.session_state["_bokeh_key"] = bokeh_key
@@ -220,7 +207,6 @@ def run_step(meta: dict):
             ranges_lock=st.session_state["_ranges_lock"],
         )
 
-    # iframe styling
     st.markdown(
         """
         <style>
