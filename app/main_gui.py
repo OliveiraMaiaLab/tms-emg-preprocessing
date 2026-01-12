@@ -4,30 +4,34 @@
 main_gui.py
 -----------
 Entry point and simple router for the multi-step Streamlit app.
+Lazy-loads steps to keep startup fast (avoids importing scipy/matplotlib at boot).
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
+import importlib
+
+import streamlit as st
 
 # --- Make repo root importable so `import app...` works ---
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import streamlit as st
-
-from app.utils.persistence import load_persisted_defaults
-from app.steps.step_input import run_step as step_input
-from app.steps.step_confirmInputs import run_step as step_confirmInputs
-from app.steps.step_segmentation import run_step as step_segmentation
-from app.steps.step_mepWindow import run_step as step_mepWindow
-from app.steps.step_peakChecking import run_step as step_peakCheck
-from app.steps.step_peakCorrection import run_step as step_peakCorrection
-
 st.set_page_config(layout="wide")
+
+
+
+
+def _load_step_runner(module_path: str, func_name: str = "run_step"):
+    """Import a step module only when needed, then return its run_step callable."""
+    mod = importlib.import_module(module_path)
+    fn = getattr(mod, func_name, None)
+    if fn is None:
+        raise AttributeError(f"{module_path} has no function '{func_name}'")
+    return fn
 
 
 # -------------------------
@@ -38,10 +42,12 @@ if "step" not in st.session_state:
 
 
 # -------------------------
-# Bootstrap metadata
+# Bootstrap metadata (cheap imports only)
 # -------------------------
 if "metadata" not in st.session_state:
-    defaults = load_persisted_defaults()
+    # Import persistence lazily too (keeps boot light)
+    persistence = importlib.import_module("app.utils.persistence")
+    defaults = persistence.load_persisted_defaults()
 
     script_dir = Path(__file__).resolve().parent  # .../repo/app
 
@@ -59,7 +65,6 @@ if "metadata" not in st.session_state:
         "session": int(defaults.get("session", 1) or 1),
         "hemispheres": defaults.get("hemispheres", ["left"]) or ["left"],
 
-        # used by embedded apps / dash reload signatures / etc.
         "_script_dir": str(script_dir),
     }
 
@@ -67,15 +72,19 @@ meta = st.session_state.metadata
 
 
 # -------------------------
-# Route map
+# Route map (module paths, not functions)
 # -------------------------
 ROUTES = {
-    "input": step_input,
-    "confirmInputs": step_confirmInputs,
-    "segmentation": step_segmentation,
-    "mep_window": step_mepWindow,
-    "peak_checking": step_peakCheck,
-    "peak_correction": step_peakCorrection,
+    "input": "app.steps.step_input",
+    "confirmInputs": "app.steps.step_confirmInputs",
+    "segmentation": "app.steps.step_segmentation",
+    "mep_window": "app.steps.step_mepWindow",
+    "peak_checking": "app.steps.step_peakChecking",
+    "peak_correction": "app.steps.step_peakCorrection",
 }
 
-ROUTES.get(st.session_state.step, step_input)
+step_name = st.session_state.step
+module_path = ROUTES.get(step_name, ROUTES["input"])
+
+run_step = _load_step_runner(module_path)
+run_step(meta)

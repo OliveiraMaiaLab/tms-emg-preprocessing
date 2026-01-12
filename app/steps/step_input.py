@@ -33,6 +33,7 @@ from app.utils.persistence import (
     ensure_metadata,
     ensure_output_dir,
     save_persisted_defaults,
+    resolve_template_path,
 )
 
 
@@ -118,6 +119,8 @@ def _join_data_path(data_dir: str, emg_name: str) -> str:
 
 def run_step(meta: dict):
     meta = ensure_metadata()
+    resolve_template_path(meta)
+
 
     # Flash message (from finishing other steps)
     msg = st.session_state.pop("_global_flash_success", None)
@@ -240,9 +243,11 @@ def run_step(meta: dict):
     # Advance
     # -------------------------
     if st.button("Advance ▶", type="primary"):
-        # Basic validation
-        if not meta.get("template_file") or not os.path.exists(meta["template_file"]):
-            st.error("Template file does not exist.")
+        # --- Validate template via persistence resolver (supports filename-in-config OR full path) ---
+        tpl_raw = str(meta.get("template_file", "") or "").strip()
+        tpl_path = resolve_template_path(tpl_raw)
+        if not tpl_raw or not tpl_path.exists():
+            st.error(f"Template file does not exist: {tpl_path}")
             st.stop()
 
         if meta.get("data_dir") and not os.path.isdir(str(meta["data_dir"])):
@@ -263,14 +268,18 @@ def run_step(meta: dict):
         except Exception:
             st.stop()
 
-        # Persist GUI defaults (settings file is handled inside utils.persistence)
+        # --- Persist GUI defaults using YOUR persistence API (names, not full paths) ---
+        template_name = Path(tpl_path).name
+        input_name = str(st.session_state.get("_input_name") or Path(meta["input_file"]).name)
+
         save_persisted_defaults(
-            template_path=meta["template_file"],
-            input_path=meta["input_file"],
+            template_name=template_name,
+            input_name=input_name,
             output_dir=meta["output_dir"],
-            data_dir=meta.get("data_dir", ""),
-            researcher_id=meta.get("researcher_id", ""),
+            data_dir=str(meta.get("data_dir", "")),
+            researcher_id=str(meta.get("researcher_id", "")),
         )
 
         st.session_state.step = "confirmInputs"
         st.rerun()
+

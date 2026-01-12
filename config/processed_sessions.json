@@ -4,9 +4,9 @@
     {
       "data_file": "example_data.bin",
       "session_file": "sub-example_sub_ses-1.json",
-      "finished_at": "2026-01-12T13:52:36.001274Z",
+      "finished_at": "2026-01-12T14:58:51.202189Z",
       "researcher_id": "FFV",
-      "pipeline_version": "1"
+      "pipeline_version": "1.0.0"
     }
   ]
 }

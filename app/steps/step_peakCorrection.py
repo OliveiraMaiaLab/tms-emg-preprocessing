@@ -216,7 +216,6 @@ def _remaining_queue(session: dict, blocks: list[str], hemis: list[str], visited
 
 def _finish_to_input(meta: dict, session_file: Path) -> None:
     update_processed_sessions_registry(
-        output_dir=meta.get("output_dir") or session_file.parent,
         data_file=meta.get("input_file", "UNKNOWN_DATA_FILE"),
         session_file=session_file,
         researcher_id=meta.get("researcher_id", ""),
