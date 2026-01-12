@@ -7,6 +7,13 @@
       "finished_at": "2026-01-12T14:58:51.202189Z",
       "researcher_id": "FFV",
       "pipeline_version": "1.0.0"
+    },
+    {
+      "data_file": "example_data copy.bin",
+      "session_file": "sub-example_sub_ses-1.json",
+      "finished_at": "2026-01-12T15:51:08.707865Z",
+      "researcher_id": "FFV",
+      "pipeline_version": "1.0.0"
     }
   ]
 }
