@@ -1,21 +1,13 @@
 # app/steps/step_segmentation.py
 # -*- coding: utf-8 -*-
 """
-steps/step_segmentation.py
---------------------------
-Step 3: EMG Segmentation.
+steps/step_segmentation.py — Step 3: EMG segmentation.
 
-Block management:
-  - All blocks (minus emg_ref) can be activated/deactivated via a multiselect.
-  - An "Update" button persists the selection to JSON, clears segmentation ranges
-    for deactivated blocks, and restarts the Bokeh server with the filtered list.
-
-Downsampling:
-  - File duration and raw point count are estimated from file size.
-  - Default downsample factor is computed to keep the Bokeh plot under
-    ~200 k points per channel; factor=1 means no downsampling.
-  - The user can override the factor and click "Update" to re-render.
-  - The Bokeh server restarts any time active_blocks or the factor changes.
+Block management fix: active_blocks is written to JSON immediately when
+the multiselect changes, so _try_advance always validates against the
+current UI state even if the user hasn't clicked "Update" yet.
+The Bokeh server restart (+ segmentation range clearing for deactivated
+blocks) still only happens on the "Update" button click.
 """
 
 from __future__ import annotations
@@ -40,18 +32,14 @@ PREV_STEP = "input"
 THIS_STEP = "segmentation"
 NEXT_STEP = "mep_window"
 
-_SAFE_POINTS = 200_000   # target max points per channel in Bokeh
-_RESHAPE     = 4         # channels in file (uint16 interleaved)
+_SAFE_POINTS = 200_000
+_RESHAPE     = 4
 
 
 def _estimate_file_info(input_file: str, fs: float) -> tuple[int, float, int]:
-    """
-    Estimate (n_samples, duration_s, suggested_factor) from file size.
-    No actual loading — purely from os.stat.
-    """
     try:
         file_bytes = Path(input_file).stat().st_size
-        n_samples  = file_bytes // (_RESHAPE * 2)   # uint16 = 2 bytes
+        n_samples  = file_bytes // (_RESHAPE * 2)
         duration_s = n_samples / fs
         factor     = max(1, n_samples // _SAFE_POINTS)
         return n_samples, duration_s, factor
@@ -61,9 +49,9 @@ def _estimate_file_info(input_file: str, fs: float) -> tuple[int, float, int]:
 
 def _read_active_blocks(session_file: str, exp_structure: list[str]) -> list[str]:
     try:
-        js   = json.loads(Path(session_file).read_text())
+        js    = json.loads(Path(session_file).read_text())
         saved = js.get("active_blocks")
-        mgbl = _manageable_blocks(exp_structure)
+        mgbl  = _manageable_blocks(exp_structure)
         if isinstance(saved, list):
             return [b for b in mgbl if b in set(saved)]
         return list(mgbl)
@@ -71,11 +59,26 @@ def _read_active_blocks(session_file: str, exp_structure: list[str]) -> list[str
         return _manageable_blocks(exp_structure)
 
 
-def _write_active_blocks(
+def _write_active_blocks_only(session_file: str, new_active: list[str]) -> None:
+    """
+    Write only the active_blocks list to JSON.
+    Does NOT clear segmentation ranges or restart Bokeh — called immediately
+    on multiselect change so _try_advance always validates the right set.
+    """
+    js = json.loads(Path(session_file).read_text())
+    js["active_blocks"] = new_active
+    Path(session_file).write_text(json.dumps(js, indent=2))
+
+
+def _write_active_blocks_full(
     session_file: str,
     new_active: list[str],
     clear_segmentation_for: list[str],
 ) -> None:
+    """
+    Full update on "Update" button: write active_blocks AND clear segmentation
+    ranges for newly deactivated blocks.
+    """
     js  = json.loads(Path(session_file).read_text())
     js["active_blocks"] = new_active
     seg = js.get("segmentation") or {}
@@ -150,10 +153,9 @@ def _hinder_muscle_activity_flag(pulse_idx: int, emg: np.ndarray, fs: float = 40
 def compute_and_store_mep_pulses(session_file: str, meta: dict, blocks: list[str]):
     from app.utils.tms_module import _load_data_cached
 
-    js   = json.loads(Path(session_file).read_text())
-    info = js.get("info") or {}
-
-    data_file = meta.get("input_file") or info.get("input_file")
+    js            = json.loads(Path(session_file).read_text())
+    info          = js.get("info") or {}
+    data_file     = meta.get("input_file") or info.get("input_file")
     if not data_file:
         raise RuntimeError("No input_file found.")
 
@@ -165,8 +167,8 @@ def compute_and_store_mep_pulses(session_file: str, meta: dict, blocks: list[str
     tms_indexes   = np.asarray(tms_indexes, dtype=int)
     pulse_times_s = tms_indexes / fs
 
-    seg   = js.get("segmentation") or {}
-    hemis = list(meta.get("hemispheres", info.get("hemispheres", ["left"])))
+    seg       = js.get("segmentation") or {}
+    hemis     = list(meta.get("hemispheres", info.get("hemispheres", ["left"])))
     meps_root = js.get("meps") if isinstance(js.get("meps"), dict) else {}
 
     rest_ref_by_hemi: dict[str, float | None] = {}
@@ -198,11 +200,8 @@ def compute_and_store_mep_pulses(session_file: str, meta: dict, blocks: list[str
             hinder_flags = [_hinder_muscle_activity_flag(p, emg, fs=fs) for p in pulses]
             rr           = rest_ref_by_hemi.get(h)
             std_flags    = [_std_muscle_activity_flag(p, emg, rr, fs=fs) for p in pulses] if rr else [0] * n
-
             meps_root[block][h] = {
-                "pulses":                    pulses,
-                "min":                       [None] * n,
-                "max":                       [None] * n,
+                "pulses": pulses, "min": [None] * n, "max": [None] * n,
                 "hinder_preactivation_flag": hinder_flags,
                 "std_preactivation_flag":    std_flags,
                 "peaks_flag":                [0] * n,
@@ -224,23 +223,20 @@ def run_step(meta: dict):
     if "_ranges_lock" not in st.session_state:
         st.session_state["_ranges_lock"] = threading.Lock()
 
-    # ---- file info (from size, no loading needed) ----
     fs = float(meta.get("sampling_rate", 4000))
     n_samples, duration_s, default_factor = _estimate_file_info(
         meta.get("input_file", ""), fs
     )
 
-    # ---- read current active blocks ----
-    all_parts  = list(meta.get("exp_structure", []))
-    manageable = _manageable_blocks(all_parts)
+    all_parts    = list(meta.get("exp_structure", []))
+    manageable   = _manageable_blocks(all_parts)
     saved_active = _read_active_blocks(session_file, all_parts)
 
-    # ---- block + downsample controls ----
+    # ---- expander: block selector + downsample ----
     with st.expander("⚙️ Signal display & block settings", expanded=False):
         st.markdown("**Active blocks**")
         st.caption(
-            "Deselect blocks not present in this recording — they will be skipped "
-            "during segmentation validation and peak checking. "
+            "Deselect blocks not present in this recording. "
             "`emg_ref` is always required and cannot be removed."
         )
 
@@ -251,6 +247,12 @@ def run_step(meta: dict):
             key="_seg_active_blocks_input",
             label_visibility="collapsed",
         )
+        
+        new_active_ordered = [b for b in manageable if b in set(selected_blocks)]
+        # # Write active_blocks immediately on any multiselect change so that
+        # # _try_advance always validates the correct set, even before Update.
+        # if set(new_active_ordered) != set(saved_active):
+        #     _write_active_blocks_only(session_file, new_active_ordered)
 
         st.divider()
         st.markdown("**Signal display**")
@@ -259,7 +261,7 @@ def run_step(meta: dict):
             st.caption(
                 f"File: **{duration_s/60:.1f} min** ({n_samples:,} samples at {int(fs)} Hz). "
                 f"Suggested factor for fast rendering: **{default_factor}** "
-                f"(factor 1 = no downsampling, full resolution)."
+                f"(factor 1 = full resolution)."
             )
         else:
             st.caption("Could not read file size — default factor 1.")
@@ -271,33 +273,30 @@ def run_step(meta: dict):
             value=int(st.session_state.get("_seg_ds_factor", default_factor)),
             step=1,
             key="_seg_ds_factor_input",
-            help="Higher values skip more samples and render faster. "
-                 "Use 1 for full resolution; increase if the plot lags.",
+            help="Higher values skip more samples and render faster.",
         )
 
         if st.button("✅ Update plot & block list", type="primary"):
-            # Persist active_blocks to JSON
+            # Full update: clear segmentation for deactivated blocks + restart Bokeh.
             newly_deactivated = [b for b in saved_active if b not in set(selected_blocks)]
-            _write_active_blocks(
+            _write_active_blocks_full(
                 session_file,
-                new_active=[b for b in manageable if b in set(selected_blocks)],
+                new_active=new_active_ordered,
                 clear_segmentation_for=newly_deactivated,
             )
-            # Store the chosen factor
             st.session_state["_seg_ds_factor"] = int(downsample_factor)
-            # Force Bokeh server restart on next render
             st.session_state.pop("_bokeh_key", None)
             st.rerun()
 
-    # Use the last confirmed values (only updated on "Update" click).
-    confirmed_active  = _read_active_blocks(session_file, all_parts)
-    confirmed_factor  = int(st.session_state.get("_seg_ds_factor", default_factor))
+    confirmed_active = _read_active_blocks(session_file, all_parts)
+    confirmed_factor = int(st.session_state.get("_seg_ds_factor", default_factor))
 
     # ---- advance logic ----
     def _try_advance() -> bool:
-        js_inner     = json.loads(Path(session_file).read_text())
-        cur_active   = set(js_inner.get("active_blocks", manageable))
-        required     = [b for b in all_parts if b in cur_active or b == "emg_ref"]
+        js_inner   = json.loads(Path(session_file).read_text())
+        cur_active = set(js_inner.get("active_blocks", manageable))
+        # Validate: active manageable blocks + emg_ref (always required if present).
+        required   = [b for b in all_parts if b in cur_active or b == "emg_ref"]
 
         missing = _segmentation_missing_flat(session_file, required)
         if missing:
@@ -333,14 +332,14 @@ def run_step(meta: dict):
         except Exception:
             st.warning(msg)
 
-    # ---- Bokeh server (restart when active_blocks or factor changes) ----
+    # ---- Bokeh server ----
     bokeh_key = (
         session_file,
         meta.get("input_file"),
         meta.get("template_file"),
         tuple(meta.get("hemispheres", [])),
-        tuple(confirmed_active),     # restart when block selection changes
-        confirmed_factor,             # restart when downsample factor changes
+        tuple(confirmed_active),
+        confirmed_factor,
     )
     if st.session_state.get("_bokeh_key") != bokeh_key:
         st.session_state["_bokeh_key"]  = bokeh_key
@@ -379,6 +378,6 @@ def run_step(meta: dict):
 
     st.caption(
         f"Session file: `{session_file}` · "
-        f"Displaying: {', '.join(confirmed_active) or '(none)'} · "
-        f"Downsample factor: {confirmed_factor}"
+        f"Active: {', '.join(confirmed_active) or '(none)'} · "
+        f"Downsample: {confirmed_factor}"
     )

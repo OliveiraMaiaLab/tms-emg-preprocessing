@@ -3,6 +3,5 @@
   "input_file": "sub-pdm0057_ses-01_2022-02-28_16-55-20.bin",
   "output_dir": "D:\\FV\\Projects\\pdm_tms\\jove_acquisition_preprocessing\\tms-emg-preprocessing\\output",
   "data_dir": "C:/Users/neuro/Desktop/tms_preproc_demo/ALL_DATA/first10_complete_subs",
-  "researcher_id": "FFV",
-  "version": "1.0.0"
+  "researcher_id": "FFV"
 }

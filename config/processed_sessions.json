@@ -17,8 +17,8 @@
     },
     {
       "data_file": "sub-pdm0057_ses-01_2022-02-28_16-55-20.bin",
-      "session_file": "sub-example_sub_ses-1.json",
-      "finished_at": "2026-05-31T20:53:23.958748Z",
+      "session_file": "sub-sub_ses-1.json",
+      "finished_at": "2026-06-01T12:28:59.856256Z",
       "researcher_id": "FFV",
       "pipeline_version": "1.0.0"
     }

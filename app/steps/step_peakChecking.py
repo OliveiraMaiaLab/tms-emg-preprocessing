@@ -6,11 +6,10 @@ steps/step_peakChecking.py
 Step 5: Peak checking.
 
 Two flags per MEP:
-  noise_flag  — signal is unusable; checking this forces peaks_flag to 0
-                and disables it in the UI.
-  peaks_flag  — "Incorrect peak" — needs manual correction in step 6.
+  noise_flag  — signal unusable; disables peaks_flag in the UI.
+  peaks_flag  — needs manual correction in step 6.
 
-Bulk noise controls (per page): Select all / Deselect all / Toggle all.
+Bulk noise controls (per page): Select all / Deselect all.
 Only active MEP blocks (from session["active_blocks"]) are shown.
 """
 
@@ -207,6 +206,13 @@ def plot_mep_cell(
     mep_min: tuple | None = None,
     mep_max: tuple | None = None,
 ) -> None:
+    # MEP id — centred, black, above the image.
+    st.markdown(
+        f'<div style="text-align:center;color:black;font-size:0.85em;'
+        f'margin-bottom:2px;line-height:1.2">MEP {mep_idx}</div>',
+        unsafe_allow_html=True,
+    )
+
     # ---- waveform image (cached) ----
     cache = _get_png_cache(block=block, hemi=hemi)
     k     = _png_key(mep_idx, mep_min, mep_max)
@@ -238,22 +244,22 @@ def plot_mep_cell(
         cache[k] = buf.getvalue()
 
     st.image(cache[k], use_container_width=True)
-    st.caption(f"MEP {mep_idx}")
 
-    # ---- checkboxes ----
-    is_noise = st.checkbox(
-        "Noise",
-        value=bool(noise_flags[mep_idx]),
-        key=f"chk_noise::{block}::{hemi}::{mep_idx}",
-    )
-
-    # Noise checked → force Incorrect peak to 0 and disable it.
-    is_incorrect = st.checkbox(
-        "Incorrect peak",
-        value=bool(peaks_flags[mep_idx]) and not is_noise,
-        key=f"chk_peak::{block}::{hemi}::{mep_idx}",
-        disabled=is_noise,
-    )
+    # ---- checkboxes (single row, shorter labels) ----
+    noise_col, peak_col = st.columns([0.5, 0.42], gap=None)
+    with noise_col:
+        is_noise = st.checkbox(
+            "Noise",
+            value=bool(noise_flags[mep_idx]),
+            key=f"chk_noise::{block}::{hemi}::{mep_idx}",
+        )
+    with peak_col:
+        is_incorrect = st.checkbox(
+            "Peak",
+            value=bool(peaks_flags[mep_idx]) and not is_noise,
+            key=f"chk_peak::{block}::{hemi}::{mep_idx}",
+            disabled=is_noise,
+        )
 
     noise_flags[mep_idx] = 1 if is_noise else 0
     peaks_flags[mep_idx] = 0 if is_noise else (1 if is_incorrect else 0)
@@ -321,6 +327,20 @@ def run_step(meta: dict):
         disabled_next=False,
     )
 
+    # Tighten checkbox column gaps inside narrow MEP grid cells.
+    st.markdown(
+        """
+        <style>
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            padding-left: 0 !important;
+            padding-right: 0.25rem !important;
+            min-width: 0 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     session = read_json(session_file)
     epoch   = get_epoch_from_session(session)
 
@@ -332,7 +352,7 @@ def run_step(meta: dict):
     st.session_state[_pc_all_blocks_key()] = [str(b) for b in blocks]
 
     if not blocks:
-        st.error("No active '*meps' blocks found. Check the block selection in the Segmentation step.")
+        st.error("No active '*meps' blocks found. Check block selection in the Segmentation step.")
         return
 
     hemis     = list(meta.get("hemispheres", ["left"]))
@@ -402,27 +422,11 @@ def run_step(meta: dict):
     st.caption(f"Reviewed in this block/hemi: **{seen}/{total}**")
     _mark_meps_seen(str(block), hemi, n_meps, mep_indices)
 
-    # ---- bulk noise controls (per page) ----
-    st.markdown("**Noise — this page:**")
-
-    # Tighten checkbox column gaps inside MEP grid cells.
-    st.markdown(
-        """
-        <style>
-        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-            padding-left: 0 !important;
-            padding-right: 0.25rem !important;
-            min-width: 0 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    bn_sel, bn_desel, bn_toggle = st.columns(3)
+    # ---- bulk noise controls (per page): Select all / Deselect all ----
+    bn_sel, bn_desel = st.columns(2)
 
     with bn_sel:
-        if st.button("Select all", key=f"_noise_selall::{block}::{hemi}::{page}"):
+        if st.button("Select all as noise", key=f"_noise_selall::{block}::{hemi}::{page}"):
             for idx in mep_indices:
                 noise_flags[idx] = 1
                 peaks_flags[idx] = 0
@@ -431,21 +435,10 @@ def run_step(meta: dict):
             st.rerun()
 
     with bn_desel:
-        if st.button("Deselect all", key=f"_noise_deselall::{block}::{hemi}::{page}"):
+        if st.button("Deselect all noise", key=f"_noise_deselall::{block}::{hemi}::{page}"):
             for idx in mep_indices:
                 noise_flags[idx] = 0
                 st.session_state[f"chk_noise::{block}::{hemi}::{idx}"] = False
-            st.rerun()
-
-    with bn_toggle:
-        if st.button("Toggle all", key=f"_noise_toggleall::{block}::{hemi}::{page}"):
-            for idx in mep_indices:
-                new_val = 1 - noise_flags[idx]
-                noise_flags[idx] = new_val
-                if new_val == 1:
-                    peaks_flags[idx] = 0
-                    st.session_state[f"chk_peak::{block}::{hemi}::{idx}"]  = False
-                st.session_state[f"chk_noise::{block}::{hemi}::{idx}"] = bool(new_val)
             st.rerun()
 
     # ---- MEP grid ----
