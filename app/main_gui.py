@@ -23,8 +23,6 @@ if str(REPO_ROOT) not in sys.path:
 st.set_page_config(layout="wide")
 
 
-
-
 def _load_step_runner(module_path: str, func_name: str = "run_step"):
     """Import a step module only when needed, then return its run_step callable."""
     mod = importlib.import_module(module_path)
@@ -45,7 +43,6 @@ if "step" not in st.session_state:
 # Bootstrap metadata (cheap imports only)
 # -------------------------
 if "metadata" not in st.session_state:
-    # Import persistence lazily too (keeps boot light)
     persistence = importlib.import_module("app.utils.persistence")
     defaults = persistence.load_persisted_defaults()
 
@@ -84,7 +81,16 @@ ROUTES = {
 }
 
 step_name = st.session_state.step
-module_path = ROUTES.get(step_name, ROUTES["input"])
+
+# Bug #16: warn and reset on unknown step instead of silently falling back to input.
+module_path = ROUTES.get(step_name)
+if module_path is None:
+    st.warning(
+        f"Unknown step '{step_name}' in session state — resetting to input. "
+        "This is likely a bug; please report it."
+    )
+    st.session_state.step = "input"
+    module_path = ROUTES["input"]
 
 run_step = _load_step_runner(module_path)
 run_step(meta)

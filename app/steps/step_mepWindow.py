@@ -17,11 +17,9 @@ from __future__ import annotations
 import threading
 import json
 from pathlib import Path
-from math import ceil
 
 import numpy as np
 import streamlit as st
-from scipy.signal import find_peaks
 
 from app.utils.persistence import (
     ensure_metadata,
@@ -30,7 +28,7 @@ from app.utils.persistence import (
 )
 from app.utils.layout import step_nav
 from app.bk_embedding.mepOverlap import start_bokeh_app
-from app.utils.tms_module import load_data, read_json, get_epoch_from_session
+from app.utils.tms_module import _load_data_cached, read_json, get_epoch_from_session
 
 PREV_STEP = "segmentation"
 THIS_STEP = "mep_window"
@@ -47,40 +45,31 @@ def save_mep_window_to_session(session_file: str, window_s: tuple[float, float])
     Path(session_file).write_text(json.dumps(js, indent=2))
 
 
-def _best_peak_idx_and_val(x: np.ndarray, pk_width: int | None, distance: int) -> tuple[int, float]:
-    """
-    Return (idx, value) for the most prominent peak in x.
-    If none found, return (0, x[0]).
-    """
-    kwargs = {"distance": distance}
-    if pk_width is not None and pk_width > 0:
-        kwargs["width"] = pk_width
-
-    peaks, props = find_peaks(x, **kwargs, prominence=0)
-    if peaks.size == 0:
-        return 0, float(x[0])
-
-    prom = props.get("prominences")
-    best_j = int(np.argmax(prom)) if prom is not None and len(prom) else 0
-    idx = int(peaks[best_j])
-    return idx, float(x[idx])
-
-
 def compute_and_store_minmax(session_file: str, meta: dict) -> None:
     """
     Uses:
       - session["meps"][block][hemi]["pulses"] (sample indices)
-      - epoch window from session (same source as step_peakChecking)
+      - epoch window from session
 
     Computes:
       - min/max inside [epoch.tmin_ms, epoch.tmax_ms] relative to pulse
+
+    Bug #11: the original code used find_peaks with distance=len(mep)-1, which
+    reduces to finding exactly one peak per window — identical to np.argmax/argmin.
+    Replaced with the simpler, clearer formulation.
+
+    Bug #7: removed the ghost `preactivation_flag` field that was being written
+    here but is not part of the schema (which uses hinder_preactivation_flag and
+    std_preactivation_flag set in step_segmentation).
     """
     js = read_json(Path(session_file))
     epoch = get_epoch_from_session(js)
 
     fs = float(meta["sampling_rate"])
+    channels = meta.get("channels") or [3, 1, 2]
+    channels_tuple = tuple(int(c) for c in channels)
 
-    data, _tms = load_data(meta["input_file"], channels=meta.get("channels"))
+    data, _tms = _load_data_cached(str(meta["input_file"]), channels_tuple, int(fs))
     hemis = list(meta.get("hemispheres", ["left"]))
 
     hemi_to_ch = {"left": 0, "right": 1}
@@ -112,11 +101,9 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
             ch = hemi_to_ch.get(hemi, 0)
             sig = data[ch, :]
 
-            pk_width = ceil(fs * 0.001)
-
-            mins, maxs = [], []
             mep_start = float(epoch.tmin_ms)
 
+            mins, maxs = [], []
             for p in pulses:
                 p = int(p)
                 a = p + a_off
@@ -128,11 +115,13 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
                     continue
 
                 mep = sig[a:b].astype(float)
-                dist = max(1, len(mep) - 1)
 
-                max_i, max_val = _best_peak_idx_and_val(mep, pk_width=pk_width, distance=dist)
-                min_i, min_val = _best_peak_idx_and_val(-mep, pk_width=pk_width, distance=dist)
-                min_val = -min_val
+                # Bug #11: find_peaks with distance=len(mep)-1 is equivalent to
+                # argmax/argmin — use the simpler form directly.
+                max_i = int(np.argmax(mep))
+                max_val = float(mep[max_i])
+                min_i = int(np.argmin(mep))
+                min_val = float(mep[min_i])
 
                 max_ms = (max_i * 1000.0 / fs) + mep_start
                 min_ms = (min_i * 1000.0 / fs) + mep_start
@@ -144,10 +133,10 @@ def compute_and_store_minmax(session_file: str, meta: dict) -> None:
             hp["max"] = maxs
 
             n = len(pulses)
-            hp.setdefault("preactivation_flag", [0] * n)
+            # Bug #7: do NOT write a "preactivation_flag" key here — it is not
+            # part of the session schema (hinder_preactivation_flag and
+            # std_preactivation_flag are set in step_segmentation).
             hp.setdefault("peaks_flag", [0] * n)
-            if len(hp["preactivation_flag"]) != n:
-                hp["preactivation_flag"] = (hp["preactivation_flag"] + [0] * n)[:n]
             if len(hp["peaks_flag"]) != n:
                 hp["peaks_flag"] = (hp["peaks_flag"] + [0] * n)[:n]
 

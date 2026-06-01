@@ -2,18 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 app/bk_embedding/segmentation.py
---------------------------------
-Creates and runs the embedded Bokeh server and right-hand controls, using a
-FLAT 'segmentation' schema in the session JSON:
+---------------------------------
+Creates and runs the embedded Bokeh server.
 
-"segmentation": {
-  "<block>": [[start, end]] | []   # no hemisphere nesting
-}
-
-- Shows EMG channels with a RangeTool
-- Lets user pick a window and "Set" it per block (convenience)
-- Prefills from session JSON if present (as "s - e" per block)
-- On Save: parses each text input and writes the flat schema above
+Accepts:
+  active_blocks     — only these blocks appear in the right panel.
+  downsample_factor — 1 = full resolution; N = keep every Nth sample.
 """
 
 from __future__ import annotations
@@ -32,7 +26,6 @@ from bokeh.layouts import column as bk_column, row as bk_row
 from bokeh.models import (
     ColumnDataSource,
     RangeTool,
-    Span,
     Button,
     Div,
     Range1d,
@@ -42,62 +35,48 @@ from bokeh.models import (
 )
 
 from app.utils.persistence import write_segmentation_ranges
-from app.utils.tms_module import load_data
+from app.utils.tms_module import _load_data_cached
+
 
 # -------------------- helpers --------------------
 
-
-def _downsample(data: np.ndarray, target_points: int = 2000) -> tuple[np.ndarray, int]:
-    factor = max(1, data.shape[1] // target_points)
-    return data[:, ::factor], factor
+def _apply_downsample(data: np.ndarray, factor: int) -> tuple[np.ndarray, int]:
+    """Return (data[:,::factor], factor). Factor 1 returns original unchanged."""
+    if factor <= 1:
+        return data, 1
+    return data[:, ::factor], int(factor)
 
 
 def _template_requests_emg_ref(meta: dict) -> bool:
-    """
-    Returns True if experiment_template.json has:
-      ["other"]["include_rest_emg_ref"] == "yes" (case-insensitive)
-    """
     tpath = meta.get("template_file")
     if not tpath:
         return False
-
     try:
         with open(tpath, "r") as f:
             tpl = json.load(f)
     except Exception:
         return False
-
     other = tpl.get("other", {}) or {}
-    val = other.get("include_rest_emg_ref", "")
-    return str(val).strip().lower() == "yes"
+    return str(other.get("include_rest_emg_ref", "")).strip().lower() == "yes"
 
 
 def _maybe_add_emg_ref(meta: dict, exp_structure: list[str]) -> list[str]:
-    """
-    If template requests it, add 'emg_ref' as an additional segmentation block.
-    Keeps ordering stable by appending at the end.
-    """
     exp_structure = list(exp_structure or [])
     if _template_requests_emg_ref(meta) and "emg_ref" not in exp_structure:
         exp_structure.append("emg_ref")
     return exp_structure
 
 
-def _load_existing_segmentation_flat(session_file: str, exp_structure: list[str]) -> dict[str, tuple[float, float]]:
-    """
-    Read the *flat* segmentation:
-      "segmentation": { part: [[s,e], ...] | [] }
-    Return {part: (s,e)} using the FIRST pair, if available.
-    """
+def _load_existing_segmentation_flat(
+    session_file: str, exp_structure: list[str]
+) -> dict[str, tuple[float, float]]:
     try:
         with open(session_file, "r") as f:
             data = json.load(f)
     except Exception:
         return {}
-
-    seg = data.get("segmentation", {}) or {}
+    seg    = data.get("segmentation", {}) or {}
     result: dict[str, tuple[float, float]] = {}
-
     for part in exp_structure:
         val = seg.get(part)
         if isinstance(val, list) and val:
@@ -108,26 +87,19 @@ def _load_existing_segmentation_flat(session_file: str, exp_structure: list[str]
                 except (TypeError, ValueError):
                     continue
                 result[part] = (s, e)
-
     return result
 
 
 def _format_range_se(start_end: tuple[float, float] | None) -> str:
-    """Format (s,e) -> 's - e' with one decimal; empty string if None."""
     if not start_end:
         return ""
-    s, e = start_end
-    return f"{s:.1f} - {e:.1f}"
+    return f"{start_end[0]:.1f} - {start_end[1]:.1f}"
 
 
 _rng_re = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*[-–]\s*([+-]?\d+(?:\.\d+)?)\s*$")
 
 
 def _parse_range_text(txt: str) -> tuple[float, float] | None:
-    """
-    Accepts 'start-end' (spaces allowed, '-' or '–').
-    Returns (start, end) as floats (ordered), or None if invalid/empty.
-    """
     if not txt:
         return None
     m = _rng_re.match(txt)
@@ -141,7 +113,6 @@ def _parse_range_text(txt: str) -> tuple[float, float] | None:
 
 # -------------------- plotting --------------------
 
-
 def _view_channels_bokeh_server(
     data: np.ndarray,
     hemispheres: list[str],
@@ -150,21 +121,21 @@ def _view_channels_bokeh_server(
     range_sink=None,
 ):
     """
-    Build interactive Bokeh plots for EMG channels with a RangeTool overview.
-    Calls range_sink(hemi, start, end) whenever the visible x-range changes.
+    Build interactive EMG overview plots.
+    Uses a single Segment glyph for TMS pulse markers (fast at high pulse counts).
     """
-    layouts = []
-    t = np.arange(data.shape[1]) / fs
+    layouts      = []
+    t            = np.arange(data.shape[1]) / fs
     initial_range = 320  # seconds
 
     for idx, hemi in enumerate(hemispheres):
         start = float(t[0])
-        end = float(min(t[0] + initial_range, t[-1]))
+        end   = float(min(t[0] + initial_range, t[-1]))
 
-        y = data[idx] / 1000.0
-        y_start, y_end = float(np.min(y)), float(np.max(y))
+        y       = data[idx] / 1000.0
+        y_start = float(np.min(y))
+        y_end   = float(np.max(y))
 
-        # Main plot
         p = figure(
             height=300,
             title=f"{hemi} Hemisphere",
@@ -178,17 +149,13 @@ def _view_channels_bokeh_server(
         source_hemi = ColumnDataSource(data=dict(x=t, y=y))
         p.line("x", "y", source=source_hemi, line_width=2)
 
-        # Pulse markers
-        for pulse_idx in tms_indexes:
-            p.add_layout(
-                Span(
-                    location=float(pulse_idx) / fs,
-                    dimension="height",
-                    line_color="gray",
-                    line_width=1,
-                    line_alpha=0.5,
-                    line_dash="dashed",
-                )
+        if len(tms_indexes) > 0:
+            pulse_t = (tms_indexes / fs).tolist()
+            n_p     = len(pulse_t)
+            p.segment(
+                x0=pulse_t, y0=[y_start] * n_p,
+                x1=pulse_t, y1=[y_end]   * n_p,
+                line_color="gray", line_width=1, line_alpha=0.5, line_dash="dashed",
             )
 
         overview = figure(
@@ -202,16 +169,13 @@ def _view_channels_bokeh_server(
         )
         overview.line("x", "y", source=source_hemi)
 
-        for pulse_idx in tms_indexes:
-            overview.add_layout(
-                Span(
-                    location=float(pulse_idx) / fs,
-                    dimension="height",
-                    line_color="gray",
-                    line_width=1,
-                    line_alpha=0.5,
-                    line_dash="dashed",
-                )
+        if len(tms_indexes) > 0:
+            pulse_t = (tms_indexes / fs).tolist()
+            n_p     = len(pulse_t)
+            overview.segment(
+                x0=pulse_t, y0=[y_start] * n_p,
+                x1=pulse_t, y1=[y_end]   * n_p,
+                line_color="gray", line_width=1, line_alpha=0.5, line_dash="dashed",
             )
 
         range_tool = RangeTool(x_range=p.x_range)
@@ -221,7 +185,7 @@ def _view_channels_bokeh_server(
         y_zoom = WheelZoomTool(dimensions="height")
         overview.add_tools(y_zoom, range_tool)
         overview.toolbar.active_scroll = y_zoom
-        overview.toolbar.active_multi = range_tool
+        overview.toolbar.active_multi  = range_tool
 
         reset_button = Button(label="Reset Y-Range", width=100)
         reset_button.js_on_click(
@@ -236,22 +200,21 @@ def _view_channels_bokeh_server(
             )
         )
 
-        pulse_div = Div(text="<b>Visible pulses:</b> 0", width=150, style={"text-align": "center"})
+        pulse_div = Div(text="<b>Visible pulses:</b> 0", width=150,
+                        style={"text-align": "center"})
         range_div = Div(
             text=f"<b>Visible range:</b> {start:.1f} - {end:.1f} s",
-            width=1200,
-            style={"text-align": "center"},
+            width=1200, style={"text-align": "center"},
         )
 
-        def update_range(attr, old, new, x_range=p.x_range, pulse_div=pulse_div, range_div=range_div, hemi=hemi):
+        def update_range(attr, old, new, x_range=p.x_range, pulse_div=pulse_div,
+                         range_div=range_div, hemi=hemi):
             visible_start = float(x_range.start)
-            visible_end = float(x_range.end)
-
-            # count pulses in visible range (note: pulses are sample indices)
-            count = sum(1 for pulse in tms_indexes if visible_start * fs <= pulse <= visible_end * fs)
+            visible_end   = float(x_range.end)
+            count = sum(1 for pulse in tms_indexes
+                        if visible_start * fs <= pulse <= visible_end * fs)
             pulse_div.text = f"<b>Visible pulses:</b> {count}"
             range_div.text = f"<b>Visible range:</b> {visible_start:.2f} - {visible_end:.2f} s"
-
             if range_sink is not None:
                 try:
                     range_sink(hemi, visible_start, visible_end)
@@ -259,7 +222,7 @@ def _view_channels_bokeh_server(
                     print(f"[range_sink error] {e}")
 
         p.x_range.on_change("start", update_range)
-        p.x_range.on_change("end", update_range)
+        p.x_range.on_change("end",   update_range)
 
         top_row = bk_row(reset_button, pulse_div, range_div, sizing_mode="stretch_width")
         layouts.append(bk_column(top_row, p, overview, sizing_mode="stretch_width"))
@@ -275,52 +238,71 @@ def _view_channels_bokeh_server(
 
 # -------------------- app --------------------
 
-
-def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_store, ranges_lock):
+def start_bokeh_app(
+    meta,
+    session_file: str,
+    exp_structure,
+    SCRIPT_DIR,
+    ranges_store,
+    ranges_lock,
+    active_blocks: list[str] | None = None,
+    downsample_factor: int = 5,
+):
     """
     Launch a Bokeh app in a background thread; return the chosen port.
-    'ranges_store' is updated by the plot sinks: {hemi: (start, end)}.
+
+    active_blocks:     blocks shown in the right panel (and validated on advance).
+                       Defaults to all blocks in exp_structure.
+    downsample_factor: 1 = full resolution; N = keep every Nth sample.
     """
 
     def bkapp(doc):
-        # Ensure exp_structure includes optional emg_ref if requested by template
         exp_structure_local = _maybe_add_emg_ref(meta, exp_structure)
 
-        # in-memory store for what we’ve already captured via "Set" or prefill
+        # Right panel only shows active blocks; emg_ref is always included.
+        panel_blocks = list(active_blocks) if active_blocks is not None else list(exp_structure_local)
+        # Ensure emg_ref is in the panel list if it's in the full structure.
+        if "emg_ref" in exp_structure_local and "emg_ref" not in panel_blocks:
+            panel_blocks.append("emg_ref")
+
         block_ranges: dict[str, tuple[float, float]] = {}
 
         def sink(hemi: str, start: float, end: float):
             with ranges_lock:
                 ranges_store[hemi] = (start, end)
 
-        # data + plots
-        data, tms_indexes = load_data(meta["input_file"], channels=meta.get("channels"))
-        data_ds, factor = _downsample(data, target_points=10000)
+        channels       = meta.get("channels") or [3, 1, 2]
+        channels_tuple = tuple(int(c) for c in channels)
+        fs_int         = int(meta["sampling_rate"])
+
+        data, tms_indexes = _load_data_cached(str(meta["input_file"]), channels_tuple, fs_int)
+
+        # Apply downsample_factor (1 = unchanged).
+        data_ds, applied_factor = _apply_downsample(data, int(downsample_factor))
+        tms_ds = (tms_indexes // applied_factor) if applied_factor > 1 else tms_indexes
 
         plots = _view_channels_bokeh_server(
             data_ds,
             meta["hemispheres"],
-            (tms_indexes // factor),
-            fs=float(meta["sampling_rate"]) / factor,
+            tms_ds,
+            fs=float(meta["sampling_rate"]) / applied_factor,
             range_sink=sink,
         )
         left_col = bk_column(*plots, sizing_mode="stretch_both")
 
-        # ---------- right panel UI ----------
-        RIGHT_LABEL_W = 70
-        RIGHT_INPUT_W = 90
+        # ---------- right panel ----------
+        RIGHT_LABEL_W  = 70
+        RIGHT_INPUT_W  = 90
         RIGHT_BUTTON_W = 40
-        COL_GAP = 4
-        PANEL_PADDING = 16
-        SCROLLBAR_W = 16
-        HEADER_H = 24
-        ROW_H = 28
-        PANEL_H = 400
+        COL_GAP        = 4
+        PANEL_PADDING  = 16
+        SCROLLBAR_W    = 16
+        HEADER_H       = 24
+        ROW_H          = 28
+        PANEL_H        = 400
 
-        SAVE_BUTTON_W = RIGHT_LABEL_W + RIGHT_INPUT_W + RIGHT_BUTTON_W + 2 * COL_GAP + (2 * PANEL_PADDING)
-        RIGHT_PANEL_W = (
-            RIGHT_LABEL_W + RIGHT_INPUT_W + RIGHT_BUTTON_W + 2 * COL_GAP + (2 * PANEL_PADDING) + SCROLLBAR_W
-        )
+        SAVE_BUTTON_W  = RIGHT_LABEL_W + RIGHT_INPUT_W + RIGHT_BUTTON_W + 2 * COL_GAP + (2 * PANEL_PADDING)
+        RIGHT_PANEL_W  = SAVE_BUTTON_W + SCROLLBAR_W
 
         doc.add_root(
             Div(
@@ -336,90 +318,84 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
                   .tight {{ margin:0; padding:0; }}
                 </style>
                 """,
-                width=0,
-                height=0,
+                width=0, height=0,
             )
         )
 
         title_div = Div(text="<h3 class='tight'>Experiment Blocks</h3>", align="center")
-
         hdr = bk_row(
-            Div(text="<b>Block</b>", css_classes=["lab"], width=RIGHT_LABEL_W, height=HEADER_H),
-            Div(text="<b>Range (s)</b>", width=RIGHT_INPUT_W, height=HEADER_H, align="center"),
-            Div(text="&nbsp;", width=RIGHT_BUTTON_W, height=HEADER_H),
-            sizing_mode="fixed",
-            spacing=COL_GAP,
+            Div(text="<b>Block</b>",      css_classes=["lab"], width=RIGHT_LABEL_W, height=HEADER_H),
+            Div(text="<b>Range (s)</b>",  width=RIGHT_INPUT_W, height=HEADER_H, align="center"),
+            Div(text="&nbsp;",            width=RIGHT_BUTTON_W, height=HEADER_H),
+            sizing_mode="fixed", spacing=COL_GAP,
         )
 
-        rows = [hdr]
-        text_inputs: dict[str, TextInput] = {}
+        rows        : list = [hdr]
+        text_inputs : dict[str, TextInput] = {}
 
-        # prefill from flat segmentation
-        prefill_map = _load_existing_segmentation_flat(session_file, exp_structure_local)
+        prefill_map = _load_existing_segmentation_flat(session_file, panel_blocks)
         block_ranges.update(prefill_map)
 
         def make_set_callback(part: str, ti: TextInput):
             def _cb():
                 with ranges_lock:
-                    current = dict(ranges_store)  # {hemi: (s,e)}
+                    current = dict(ranges_store)
                 if current:
                     starts = [se[0] for se in current.values()]
-                    ends = [se[1] for se in current.values()]
+                    ends   = [se[1] for se in current.values()]
                     shared = (min(starts), max(ends))
                     block_ranges[part] = shared
                     ti.value = _format_range_se(shared)
-
             return _cb
 
-        for part in exp_structure_local:
-            lab = Div(text=f"<b>{part}</b>", css_classes=["lab"], width=RIGHT_LABEL_W, height=ROW_H)
-            prefilled_value = _format_range_se(prefill_map.get(part))
-            ti = TextInput(placeholder="e.g. 100 - 240", value=prefilled_value, width=RIGHT_INPUT_W, height=ROW_H)
-            btn = Button(label="Set", button_type="default", width=RIGHT_BUTTON_W, height=ROW_H)
+        # Only show panel_blocks in the right panel UI.
+        for part in panel_blocks:
+            lab = Div(text=f"<b>{part}</b>", css_classes=["lab"],
+                      width=RIGHT_LABEL_W, height=ROW_H)
+            prefilled = _format_range_se(prefill_map.get(part))
+            ti  = TextInput(placeholder="e.g. 100 - 240", value=prefilled,
+                            width=RIGHT_INPUT_W, height=ROW_H)
+            btn = Button(label="Set", button_type="default",
+                         width=RIGHT_BUTTON_W, height=ROW_H)
             btn.on_click(make_set_callback(part, ti))
             rows.append(bk_row(lab, ti, btn, sizing_mode="fixed", spacing=COL_GAP))
             text_inputs[part] = ti
 
-        scroll_body = bk_column(*rows, sizing_mode="stretch_width", spacing=0)
-        scroll_container = bk_column(scroll_body, width=RIGHT_PANEL_W, height=PANEL_H, sizing_mode="fixed")
+        scroll_body      = bk_column(*rows, sizing_mode="stretch_width", spacing=0)
+        scroll_container = bk_column(scroll_body, width=RIGHT_PANEL_W, height=PANEL_H,
+                                     sizing_mode="fixed")
         scroll_container.css_classes = ["scrollpane"]
 
         DEFAULT_SAVE_LABEL = "Save segmentation"
-        save_btn = Button(
-            label=DEFAULT_SAVE_LABEL,
-            button_type="warning",
-            width=SAVE_BUTTON_W,
-            height=28,
-            align="start",
-        )
+        save_btn = Button(label=DEFAULT_SAVE_LABEL, button_type="warning",
+                          width=SAVE_BUTTON_W, height=28, align="start")
 
         _status_counter = {"v": 0}
 
         def flash_status(text: str, typ: str = "success", duration_ms: int = 1500):
             _status_counter["v"] += 1
             my_token = _status_counter["v"]
-            save_btn.label = text
+            save_btn.label       = text
             save_btn.button_type = typ
 
             def _reset():
                 if _status_counter["v"] == my_token:
-                    save_btn.label = DEFAULT_SAVE_LABEL
+                    save_btn.label       = DEFAULT_SAVE_LABEL
                     save_btn.button_type = "warning"
 
             doc.add_timeout_callback(_reset, duration_ms)
 
         def save_all():
-            to_save: dict[str, Any] = {}
-            invalid_parts: list[str] = []
+            to_save      : dict[str, Any] = {}
+            invalid_parts: list[str]      = []
 
-            for part in exp_structure_local:
+            for part in panel_blocks:
                 txt = text_inputs[part].value.strip() if part in text_inputs else ""
                 if txt == "":
                     to_save[part] = []
                 else:
                     parsed = _parse_range_text(txt)
                     if parsed:
-                        # write_segmentation_ranges expects [start, end] for this block (flat schema)
                         to_save[part] = [float(parsed[0]), float(parsed[1])]
                     else:
                         invalid_parts.append(part)
@@ -429,11 +405,10 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
                 write_segmentation_ranges(
                     session_file=session_file,
                     block_ranges=to_save,
-                    hemis=meta.get("hemispheres", []),  # ignored for flat schema (kept for API compat)
+                    hemis=meta.get("hemispheres", []),
                     exp_structure=list(exp_structure_local),
                 )
-
-                new_prefill = _load_existing_segmentation_flat(session_file, exp_structure_local)
+                new_prefill = _load_existing_segmentation_flat(session_file, panel_blocks)
                 block_ranges.clear()
                 block_ranges.update(new_prefill)
 
@@ -441,20 +416,15 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
                     flash_status(f"Saved (check: {', '.join(invalid_parts)})", "warning", 2200)
                 else:
                     flash_status("Saved ✅", "success", 1200)
-
             except Exception as e:
                 flash_status(f"Error: {e}", "danger", 2200)
 
         save_btn.on_click(save_all)
 
         right_col = bk_column(
-            title_div,
-            scroll_container,
-            save_btn,
-            width=RIGHT_PANEL_W,
-            height=PANEL_H,
-            sizing_mode="fixed",
-            spacing=6,
+            title_div, scroll_container, save_btn,
+            width=RIGHT_PANEL_W, height=PANEL_H,
+            sizing_mode="fixed", spacing=6,
         )
 
         doc.add_root(bk_row(left_col, right_col, sizing_mode="stretch_both", spacing=10))
@@ -464,11 +434,8 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
 
     def run_server(holder: list[int]):
         server = Server(
-            {"/bkapp": bkapp},
-            port=0,
-            allow_websocket_origin=["*"],
-            address="127.0.0.1",
-            use_xheaders=True,
+            {"/bkapp": bkapp}, port=0,
+            allow_websocket_origin=["*"], address="127.0.0.1", use_xheaders=True,
         )
         server.start()
         holder.append(server.port)
@@ -477,7 +444,11 @@ def start_bokeh_app(meta, session_file: str, exp_structure, SCRIPT_DIR, ranges_s
     t = threading.Thread(target=run_server, args=(port_holder,), daemon=True)
     t.start()
 
-    while not port_holder:
+    for _ in range(50):
+        if port_holder:
+            break
         time.sleep(0.1)
+    else:
+        raise RuntimeError("Segmentation Bokeh server failed to start within 5 seconds.")
 
     return port_holder[0]

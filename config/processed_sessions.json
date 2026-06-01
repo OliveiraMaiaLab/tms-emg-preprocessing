@@ -14,6 +14,13 @@
       "finished_at": "2026-01-12T15:51:08.707865Z",
       "researcher_id": "FFV",
       "pipeline_version": "1.0.0"
+    },
+    {
+      "data_file": "sub-pdm0057_ses-01_2022-02-28_16-55-20.bin",
+      "session_file": "sub-example_sub_ses-1.json",
+      "finished_at": "2026-05-31T20:53:23.958748Z",
+      "researcher_id": "FFV",
+      "pipeline_version": "1.0.0"
     }
   ]
 }

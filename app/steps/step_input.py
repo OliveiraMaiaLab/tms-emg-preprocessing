@@ -42,15 +42,11 @@ def _default_registry_path(output_dir: str | None) -> Path:
     processed_sessions.json lives in /config now.
     If output_dir is provided and contains a registry, we allow it, but default is repo_root/config.
     """
-    # Try output_dir first (legacy / user override)
     if output_dir:
         p = Path(output_dir) / "processed_sessions.json"
         if p.exists():
             return p
 
-    # Repo root assumed = parent of "app" directory.
-    # This file is in app/steps, so: repo_root = .../ (two parents up from this file) in runtime is not guaranteed.
-    # Use cwd-based heuristic: look for ./config/processed_sessions.json
     cwd = Path(os.getcwd())
     p2 = cwd / "config" / "processed_sessions.json"
     return p2
@@ -60,14 +56,10 @@ def _load_processed_data_filenames(output_dir: str, registry_name: str = "proces
     """
     Reads processed_sessions.json and returns a set of processed data_file basenames.
     If missing/corrupt, returns empty set.
-
-    New default: config/processed_sessions.json (but supports legacy <output_dir>/processed_sessions.json).
     """
     try:
         reg_path = _default_registry_path(output_dir)
-        # allow explicit registry_name override if user passed a non-default
         if registry_name != "processed_sessions.json":
-            # if it's a filename, interpret relative to output_dir; if path, take it.
             rp = Path(registry_name)
             reg_path = rp if rp.is_absolute() or rp.parent != Path(".") else (Path(output_dir) / registry_name)
 
@@ -105,12 +97,10 @@ def _join_data_path(data_dir: str, emg_name: str) -> str:
     if not emg_name:
         return ""
 
-    # If user pasted a full/relative path, respect it.
     p = Path(emg_name)
     if p.parent != Path(".") or p.is_absolute():
         return str(p)
 
-    # Otherwise: treat as filename inside data_dir
     if data_dir:
         return str(Path(data_dir) / emg_name)
 
@@ -119,8 +109,11 @@ def _join_data_path(data_dir: str, emg_name: str) -> str:
 
 def run_step(meta: dict):
     meta = ensure_metadata()
-    resolve_template_path(meta)
 
+    # Bug #2: resolve_template_path expects a string, not the meta dict.
+    # This call is a no-op (result discarded) but serves as a validation
+    # that the path resolver handles the current value without crashing.
+    resolve_template_path(meta.get("template_file", ""))
 
     # Flash message (from finishing other steps)
     msg = st.session_state.pop("_global_flash_success", None)
@@ -130,7 +123,6 @@ def run_step(meta: dict):
     st.title("TMS-EMG Preprocessing GUI")
     st.caption(f"Pipeline version: `{meta.get('version', '')}`")
 
-    # Keep a separate "filename only" field, while meta["input_file"] stays a full path.
     if "_input_name" not in st.session_state:
         st.session_state["_input_name"] = Path(str(meta.get("input_file", ""))).name
 
@@ -168,13 +160,11 @@ def run_step(meta: dict):
         bin_files = _list_bin_files(data_dir)
         processed = _load_processed_data_filenames(output_dir)
 
-        # Build display labels + keep mapping back to real filename
         items = []
         for fn in bin_files:
             is_done = fn in processed
             items.append((is_done, fn))
 
-        # Unprocessed first, processed last; then alphabetical
         items.sort(key=lambda t: (t[0], t[1].lower()))
 
         display_to_filename: dict[str, str] = {}
@@ -182,13 +172,11 @@ def run_step(meta: dict):
 
         for is_done, fn in items:
             label = f"✅ {fn}" if is_done else fn
-            # handle rare collision if a filename already starts with "✅ "
             if label in display_to_filename:
                 label = f"{label} "
             display_to_filename[label] = fn
             display_labels.append(label)
 
-        # Keep previous selection if possible
         prev_name = st.session_state.get("_input_name", "") or Path(str(meta.get("input_file", ""))).name
         prev_label = None
         for lbl, fn in display_to_filename.items():
@@ -208,10 +196,7 @@ def run_step(meta: dict):
             )
             selected_name = display_to_filename[selected_label]
 
-        # IMPORTANT: keep filename-only state in sync with dropdown selection
         st.session_state["_input_name"] = selected_name
-
-        # Update full path in meta (single source of truth)
         meta["input_file"] = _join_data_path(meta.get("data_dir", ""), selected_name)
 
     with e:
@@ -235,15 +220,14 @@ def run_step(meta: dict):
     with col4:
         st.markdown("Hemisphere(s):")
         h1, h2 = st.columns(2)
-        left = h1.checkbox("Left", value=("left" in meta.get("hemispheres", ["left"])) )
-        right = h2.checkbox("Right", value=("right" in meta.get("hemispheres", [])) )
+        left = h1.checkbox("Left", value=("left" in meta.get("hemispheres", ["left"])))
+        right = h2.checkbox("Right", value=("right" in meta.get("hemispheres", [])))
         meta["hemispheres"] = [h for h, v in (("left", left), ("right", right)) if v]
 
     # -------------------------
     # Advance
     # -------------------------
     if st.button("Advance ▶", type="primary"):
-        # --- Validate template via persistence resolver (supports filename-in-config OR full path) ---
         tpl_raw = str(meta.get("template_file", "") or "").strip()
         tpl_path = resolve_template_path(tpl_raw)
         if not tpl_raw or not tpl_path.exists():
@@ -262,13 +246,11 @@ def run_step(meta: dict):
             st.error("Select at least one hemisphere.")
             st.stop()
 
-        # Make output dir (and show toast)
         try:
             meta["output_dir"] = ensure_output_dir(meta.get("output_dir", ""), show_toast=True)
         except Exception:
             st.stop()
 
-        # --- Persist GUI defaults using YOUR persistence API (names, not full paths) ---
         template_name = Path(tpl_path).name
         input_name = str(st.session_state.get("_input_name") or Path(meta["input_file"]).name)
 
@@ -282,4 +264,3 @@ def run_step(meta: dict):
 
         st.session_state.step = "confirmInputs"
         st.rerun()
-

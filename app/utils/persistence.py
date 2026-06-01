@@ -3,13 +3,6 @@
 persistence.py
 --------------
 Centralized JSON I/O and app/state bootstrap helpers.
-
-This module owns:
-- config paths (config/.tms_emg_gui_settings.json, config/experiment_template.json,
-  config/processed_sessions.json)
-- persisted defaults (auto-upgrade)
-- session file scaffolding + structure hydration
-- processed sessions registry (in config/)
 """
 
 from __future__ import annotations
@@ -21,28 +14,25 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Dict, List
 
-import numpy as np
 import streamlit as st
 
 
 # =============================================================================
 # Project paths
 # =============================================================================
-# persistence.py is at: <root>/app/utils/persistence.py
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_DIR = PROJECT_ROOT / "config"
+CONFIG_DIR   = PROJECT_ROOT / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-SETTINGS_FILE = CONFIG_DIR / ".tms_emg_gui_settings.json"
+SETTINGS_FILE           = CONFIG_DIR / ".tms_emg_gui_settings.json"
 PROCESSED_REGISTRY_FILE = CONFIG_DIR / "processed_sessions.json"
-DEFAULT_TEMPLATE_PATH = CONFIG_DIR / "experiment_template.json"
+DEFAULT_TEMPLATE_PATH   = CONFIG_DIR / "experiment_template.json"
 
-# Reasonable project defaults
-DEFAULT_DATA_DIR = str(PROJECT_ROOT / "example_data")
-DEFAULT_OUTPUT_DIR = str(PROJECT_ROOT / "output")
-DEFAULT_INPUT_FILE = ""  # filename (selected from data_dir)
+DEFAULT_DATA_DIR     = str(PROJECT_ROOT / "example_data")
+DEFAULT_OUTPUT_DIR   = str(PROJECT_ROOT / "output")
+DEFAULT_INPUT_FILE   = ""
 DEFAULT_RESEARCHER_ID = ""
-PIPELINE_VERSION = "1.0.0"
+PIPELINE_VERSION     = "1.0.0"
 
 
 # =============================================================================
@@ -65,22 +55,16 @@ def _json_write_atomic(path: Path, payload: dict) -> None:
 
 
 # =============================================================================
-# Persisted GUI settings (.tms_emg_gui_settings.json)
+# Persisted GUI settings
 # =============================================================================
 def load_persisted_defaults() -> dict:
-    """
-    Returns persisted GUI defaults.
-
-    Always returns a complete dict (new keys added if missing),
-    and auto-upgrades older settings files.
-    """
     defaults = {
-        "template_file": DEFAULT_TEMPLATE_PATH.name,  # filename
-        "input_file": DEFAULT_INPUT_FILE,             # filename
-        "output_dir": DEFAULT_OUTPUT_DIR,             # path
-        "data_dir": DEFAULT_DATA_DIR,                 # path
-        "researcher_id": DEFAULT_RESEARCHER_ID,
-        "version": PIPELINE_VERSION,
+        "template_file":  DEFAULT_TEMPLATE_PATH.name,
+        "input_file":     DEFAULT_INPUT_FILE,
+        "output_dir":     DEFAULT_OUTPUT_DIR,
+        "data_dir":       DEFAULT_DATA_DIR,
+        "researcher_id":  DEFAULT_RESEARCHER_ID,
+        "version":        PIPELINE_VERSION,
     }
 
     data = _json_read(SETTINGS_FILE, defaults)
@@ -110,19 +94,19 @@ def save_persisted_defaults(
     payload = load_persisted_defaults()
     payload.update(
         {
-            "template_file": str(template_name),
-            "input_file": str(input_name),
-            "output_dir": str(output_dir),
-            "data_dir": str(data_dir),
-            "researcher_id": str(researcher_id),
-            "version": PIPELINE_VERSION,
+            "template_file":  str(template_name),
+            "input_file":     str(input_name),
+            "output_dir":     str(output_dir),
+            "data_dir":       str(data_dir),
+            "researcher_id":  str(researcher_id),
+            "version":        PIPELINE_VERSION,
         }
     )
     _json_write_atomic(SETTINGS_FILE, payload)
 
 
 # =============================================================================
-# Processed sessions registry (config/processed_sessions.json)
+# Processed sessions registry
 # =============================================================================
 def _read_processed_registry(path: Path) -> dict:
     empty = {"version": 1, "processed": []}
@@ -132,7 +116,6 @@ def _read_processed_registry(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        # Backup corrupt file (best effort) and start fresh
         try:
             bak = path.with_suffix(path.suffix + ".corrupt")
             bak.write_text(path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
@@ -148,19 +131,16 @@ def _read_processed_registry(path: Path) -> dict:
     if not isinstance(data["processed"], list):
         data["processed"] = []
 
-    # Normalize records (best effort)
     normed = []
     for rec in data["processed"]:
-        if not isinstance(rec, dict):
-            continue
-        if "data_file" not in rec:
+        if not isinstance(rec, dict) or "data_file" not in rec:
             continue
         normed.append(
             {
-                "data_file": str(rec.get("data_file", "")),
-                "session_file": str(rec.get("session_file", "")),
-                "finished_at": str(rec.get("finished_at", "")),
-                "researcher_id": str(rec.get("researcher_id", "")),
+                "data_file":        str(rec.get("data_file", "")),
+                "session_file":     str(rec.get("session_file", "")),
+                "finished_at":      str(rec.get("finished_at", "")),
+                "researcher_id":    str(rec.get("researcher_id", "")),
                 "pipeline_version": str(rec.get("pipeline_version", "")),
             }
         )
@@ -176,7 +156,6 @@ def _write_processed_registry_atomic(path: Path, payload: dict) -> None:
 
 
 def load_processed_sessions_registry() -> dict:
-    """Convenience wrapper used by Step 1 to color + sort dropdown entries."""
     return _read_processed_registry(PROCESSED_REGISTRY_FILE)
 
 
@@ -187,32 +166,28 @@ def update_processed_sessions_registry(
     researcher_id: str = "",
     pipeline_version: str = "",
 ) -> Path:
-    """
-    Upsert mapping: data filename -> session filename into config/processed_sessions.json
-    """
-    reg_path = PROCESSED_REGISTRY_FILE
-
-    data_name = Path(data_file).name
-    sess_name = Path(session_file).name
+    reg_path    = PROCESSED_REGISTRY_FILE
+    data_name   = Path(data_file).name
+    sess_name   = Path(session_file).name
     finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     reg = _read_processed_registry(reg_path)
 
     for rec in reg["processed"]:
         if isinstance(rec, dict) and rec.get("data_file") == data_name:
-            rec["session_file"] = sess_name
-            rec["finished_at"] = finished_at
-            rec["researcher_id"] = str(researcher_id or "")
+            rec["session_file"]     = sess_name
+            rec["finished_at"]      = finished_at
+            rec["researcher_id"]    = str(researcher_id or "")
             rec["pipeline_version"] = str(pipeline_version or "")
             _write_processed_registry_atomic(reg_path, reg)
             return reg_path
 
     reg["processed"].append(
         {
-            "data_file": data_name,
-            "session_file": sess_name,
-            "finished_at": finished_at,
-            "researcher_id": str(researcher_id or ""),
+            "data_file":        data_name,
+            "session_file":     sess_name,
+            "finished_at":      finished_at,
+            "researcher_id":    str(researcher_id or ""),
             "pipeline_version": str(pipeline_version or ""),
         }
     )
@@ -221,25 +196,14 @@ def update_processed_sessions_registry(
 
 
 # =============================================================================
-# Template path helpers (template is a filename in config/)
+# Template path helpers
 # =============================================================================
 def resolve_template_path(template_name_or_path: str) -> Path:
-    """
-    Accepts either:
-    - full path to a template file, OR
-    - filename stored in config/
-
-    Returns a Path (may or may not exist; caller can validate).
-    """
     p = Path(str(template_name_or_path))
     if p.is_absolute() and p.exists():
         return p
-
-    # if user already passed something like "config/experiment_template.json"
     if p.exists():
         return p.resolve()
-
-    # otherwise interpret as config filename
     return (CONFIG_DIR / p.name).resolve()
 
 
@@ -270,12 +234,14 @@ def _normalize_flat_range(value):
 
 def _blank_mep_hemi_payload() -> dict:
     return {
-        "pulses": [],
-        "min": [],
-        "max": [],
+        "pulses":                    [],
+        "min":                       [],
+        "max":                       [],
         "hinder_preactivation_flag": [],
-        "std_preactivation_flag": [],
-        "peaks_flag": [],
+        "std_preactivation_flag":    [],
+        "peaks_flag":                [],
+        "noise_flag":                [],   # new: MEP unusable due to signal noise
+        "below_threshold_flag":      [],   # new: MEP amplitude below user threshold
     }
 
 
@@ -303,10 +269,12 @@ def _ensure_meps_block_hemi(meps_root: dict, block: str, hemi: str) -> None:
             payload[name] = arr[:n]
 
     _fit_list("hinder_preactivation_flag", 0)
-    _fit_list("std_preactivation_flag", 0)
-    _fit_list("peaks_flag", 0)
-    _fit_list("min", None)
-    _fit_list("max", None)
+    _fit_list("std_preactivation_flag",    0)
+    _fit_list("peaks_flag",                0)
+    _fit_list("noise_flag",                0)
+    _fit_list("below_threshold_flag",      0)
+    _fit_list("min",  None)
+    _fit_list("max",  None)
 
     meps_root[block][hemi] = payload
 
@@ -314,8 +282,13 @@ def _ensure_meps_block_hemi(meps_root: dict, block: str, hemi: str) -> None:
 # =============================================================================
 # Session file scaffolding
 # =============================================================================
+def _manageable_blocks(exp_structure: List[str]) -> List[str]:
+    """Blocks the user can activate/deactivate (everything except emg_ref)."""
+    return [b for b in exp_structure if b != "emg_ref"]
+
+
 def _init_session_payload(meta: dict, exp_structure: List[str]) -> dict:
-    hemis = list(meta.get("hemispheres", []))
+    hemis      = list(meta.get("hemispheres", []))
     mep_blocks = [p for p in exp_structure if str(p).lower().endswith("meps")]
 
     segmentation = {part: [] for part in exp_structure}
@@ -330,19 +303,21 @@ def _init_session_payload(meta: dict, exp_structure: List[str]) -> dict:
 
     return {
         "info": {
-            "template_file": str(meta.get("template_file", "")),  # filename or path
-            "input_file": str(meta.get("input_file", "")),        # filename or path
-            "data_dir": str(meta.get("data_dir", "")),
-            "sampling_rate": int(meta.get("sampling_rate", 4000)),
-            "session": int(meta.get("session", 1)),
-            "hemispheres": hemis,
-            "output_dir": str(meta.get("output_dir", DEFAULT_OUTPUT_DIR)),
-            "researcher_id": str(meta.get("researcher_id", "")),
+            "template_file":    str(meta.get("template_file", "")),
+            "input_file":       str(meta.get("input_file", "")),
+            "data_dir":         str(meta.get("data_dir", "")),
+            "sampling_rate":    int(meta.get("sampling_rate", 4000)),
+            "session":          int(meta.get("session", 1)),
+            "hemispheres":      hemis,
+            "output_dir":       str(meta.get("output_dir", DEFAULT_OUTPUT_DIR)),
+            "researcher_id":    str(meta.get("researcher_id", "")),
             "pipeline_version": str(meta.get("version", "")),
         },
-        "segmentation": segmentation,
-        "mep_window": [None, None],
-        "meps": meps_root,
+        # All manageable blocks are active by default.
+        "active_blocks": _manageable_blocks(exp_structure),
+        "segmentation":  segmentation,
+        "mep_window":    [None, None],
+        "meps":          meps_root,
     }
 
 
@@ -352,6 +327,26 @@ def _ensure_structure(data: dict, hemis: List[str], exp_structure: List[str]) ->
     data.setdefault("mep_window", [None, None])
     data.setdefault("meps", {})
 
+    # ---- active_blocks ----
+    # The user can toggle any block except emg_ref.
+    # New blocks introduced by a template change are added as active by default.
+    manageable = _manageable_blocks(exp_structure)
+    saved_active = data.get("active_blocks")
+
+    if saved_active is None or not isinstance(saved_active, list):
+        # First time or corrupt: activate everything
+        data["active_blocks"] = list(manageable)
+    else:
+        saved_set = set(saved_active)
+        # Add any new blocks from the template that weren't tracked before
+        for b in manageable:
+            if b not in saved_set:
+                saved_active.append(b)
+                saved_set.add(b)
+        # Keep only valid manageable blocks, in template order
+        data["active_blocks"] = [b for b in manageable if b in saved_set]
+
+    # ---- segmentation ----
     seg = data.get("segmentation")
     if not isinstance(seg, dict):
         seg = {}
@@ -363,6 +358,7 @@ def _ensure_structure(data: dict, hemis: List[str], exp_structure: List[str]) ->
         seg[part] = _normalize_flat_range(seg.get(part))
     data["segmentation"] = seg
 
+    # ---- meps ----
     meps_root = data.get("meps")
     if not isinstance(meps_root, dict):
         meps_root = {}
@@ -373,9 +369,9 @@ def _ensure_structure(data: dict, hemis: List[str], exp_structure: List[str]) ->
     data["meps"] = meps_root
 
     info = data.setdefault("info", {})
-    info.setdefault("output_dir", str(DEFAULT_OUTPUT_DIR))
-    info.setdefault("researcher_id", "")
-    info.setdefault("pipeline_version", "")
+    info.setdefault("output_dir",        str(DEFAULT_OUTPUT_DIR))
+    info.setdefault("researcher_id",     "")
+    info.setdefault("pipeline_version",  "")
     data["info"] = info
 
     return data
@@ -411,14 +407,14 @@ def create_or_update_session_file(meta: dict, exp_structure: List[str]) -> str:
         data.setdefault("info", {})
         data["info"].update(
             {
-                "template_file": str(meta.get("template_file", "")),
-                "input_file": str(meta.get("input_file", "")),
-                "data_dir": str(meta.get("data_dir", "")),
-                "sampling_rate": int(meta.get("sampling_rate", 4000)),
-                "session": int(meta.get("session", 1)),
-                "hemispheres": hemis,
-                "output_dir": str(outdir),
-                "researcher_id": str(meta.get("researcher_id", "")),
+                "template_file":    str(meta.get("template_file", "")),
+                "input_file":       str(meta.get("input_file", "")),
+                "data_dir":         str(meta.get("data_dir", "")),
+                "sampling_rate":    int(meta.get("sampling_rate", 4000)),
+                "session":          int(meta.get("session", 1)),
+                "hemispheres":      hemis,
+                "output_dir":       str(outdir),
+                "researcher_id":    str(meta.get("researcher_id", "")),
                 "pipeline_version": str(meta.get("version", "")),
             }
         )
@@ -437,9 +433,9 @@ def write_segmentation_ranges(
     exp_structure: List[str],
 ) -> str:
     fpath = Path(session_file)
-    data = _json_read(fpath, {})
+    data  = _json_read(fpath, {})
     hemis_list = list(hemis or data.get("info", {}).get("hemispheres", []))
-    data = _ensure_structure(data, hemis_list, exp_structure)
+    data  = _ensure_structure(data, hemis_list, exp_structure)
 
     seg = data.get("segmentation", {})
     for part, value in (block_ranges or {}).items():
@@ -462,34 +458,33 @@ def ensure_metadata() -> dict:
     if "metadata" not in st.session_state:
         defaults = load_persisted_defaults()
         st.session_state.metadata = {
-            "template_file": defaults.get("template_file", DEFAULT_TEMPLATE_PATH.name),
-            "input_file": defaults.get("input_file", DEFAULT_INPUT_FILE),
-            "output_dir": defaults.get("output_dir", DEFAULT_OUTPUT_DIR),
-            "data_dir": defaults.get("data_dir", DEFAULT_DATA_DIR),
-            "researcher_id": defaults.get("researcher_id", DEFAULT_RESEARCHER_ID),
-            "version": defaults.get("version", PIPELINE_VERSION),
-            "sampling_rate": 4000,
-            "subj_id": "example_sub",
-            "session": 1,
-            "hemispheres": ["left"],
-            "_script_dir": str(PROJECT_ROOT),
+            "template_file":  defaults.get("template_file", DEFAULT_TEMPLATE_PATH.name),
+            "input_file":     defaults.get("input_file",    DEFAULT_INPUT_FILE),
+            "output_dir":     defaults.get("output_dir",    DEFAULT_OUTPUT_DIR),
+            "data_dir":       defaults.get("data_dir",      DEFAULT_DATA_DIR),
+            "researcher_id":  defaults.get("researcher_id", DEFAULT_RESEARCHER_ID),
+            "version":        defaults.get("version",       PIPELINE_VERSION),
+            "sampling_rate":  4000,
+            "subj_id":        "example_sub",
+            "session":        1,
+            "hemispheres":    ["left"],
+            "_script_dir":    str(PROJECT_ROOT),
         }
 
-    meta = st.session_state.metadata
+    meta     = st.session_state.metadata
     defaults = load_persisted_defaults()
 
-    meta.setdefault("template_file", defaults.get("template_file", DEFAULT_TEMPLATE_PATH.name))
-    meta.setdefault("input_file", defaults.get("input_file", DEFAULT_INPUT_FILE))
-    meta.setdefault("output_dir", defaults.get("output_dir", DEFAULT_OUTPUT_DIR))
-    meta.setdefault("data_dir", defaults.get("data_dir", DEFAULT_DATA_DIR))
-    meta.setdefault("researcher_id", defaults.get("researcher_id", DEFAULT_RESEARCHER_ID))
-    meta.setdefault("version", defaults.get("version", PIPELINE_VERSION))
-
-    meta.setdefault("sampling_rate", 4000)
-    meta.setdefault("subj_id", "example_sub")
-    meta.setdefault("session", 1)
-    meta.setdefault("hemispheres", ["left"])
-    meta.setdefault("_script_dir", str(PROJECT_ROOT))
+    meta.setdefault("template_file",  defaults.get("template_file", DEFAULT_TEMPLATE_PATH.name))
+    meta.setdefault("input_file",     defaults.get("input_file",    DEFAULT_INPUT_FILE))
+    meta.setdefault("output_dir",     defaults.get("output_dir",    DEFAULT_OUTPUT_DIR))
+    meta.setdefault("data_dir",       defaults.get("data_dir",      DEFAULT_DATA_DIR))
+    meta.setdefault("researcher_id",  defaults.get("researcher_id", DEFAULT_RESEARCHER_ID))
+    meta.setdefault("version",        defaults.get("version",       PIPELINE_VERSION))
+    meta.setdefault("sampling_rate",  4000)
+    meta.setdefault("subj_id",        "example_sub")
+    meta.setdefault("session",        1)
+    meta.setdefault("hemispheres",    ["left"])
+    meta.setdefault("_script_dir",    str(PROJECT_ROOT))
 
     return meta
 
@@ -500,11 +495,7 @@ def _template_requests_emg_ref(template: dict) -> bool:
 
 
 def ensure_template_loaded(meta: dict) -> dict:
-    """
-    Load experiment template -> exp_name, channels, exp_structure
-    and enforce emg_ref if requested in template.other.include_rest_emg_ref == "yes".
-    """
-    # meta["template_file"] can be filename or path
+    """Load experiment template → exp_name, channels (list), exp_structure."""
     tpath = resolve_template_path(str(meta.get("template_file", "")))
 
     if not tpath.exists():
@@ -513,40 +504,32 @@ def ensure_template_loaded(meta: dict) -> dict:
         st.stop()
 
     already_loaded = (
-        isinstance(meta.get("channels"), np.ndarray)
+        meta.get("channels") is not None
         and isinstance(meta.get("exp_structure"), list)
         and meta.get("exp_name") is not None
     )
 
     if already_loaded:
-        # minimal enforcement
         try:
             template = json.loads(tpath.read_text(encoding="utf-8"))
         except Exception:
             return meta
-
         exp_structure = list(meta.get("exp_structure", []))
         if _template_requests_emg_ref(template) and "emg_ref" not in exp_structure:
             exp_structure.append("emg_ref")
             meta["exp_structure"] = exp_structure
         return meta
 
-    # full load
     template = json.loads(tpath.read_text(encoding="utf-8"))
-
     meta["exp_name"] = template["experiment_name"]
-    meta["channels"] = np.array(
-        [
-            template["channels"]["synch_pulse"],
-            template["channels"]["right"],
-            template["channels"]["left"],
-        ]
-    )
-
+    meta["channels"] = [
+        int(template["channels"]["synch_pulse"]),
+        int(template["channels"]["right"]),
+        int(template["channels"]["left"]),
+    ]
     exp_structure = list(template["experiment_structure"])
     if _template_requests_emg_ref(template) and "emg_ref" not in exp_structure:
         exp_structure.append("emg_ref")
-
     meta["exp_structure"] = exp_structure
     return meta
 

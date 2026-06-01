@@ -76,7 +76,7 @@ def _error_figure(msg: str) -> go.Figure:
 def _ctx_from_request() -> tuple[dict, list[str]]:
     """
     Dash loads layout via GET /_dash-layout (often without query string).
-    If request.args is empty, parse ctx from Referer which points to /?block=...&hemi=...&mep=...
+    If request.args is empty, parse ctx from Referer.
     """
     dbg: list[str] = []
 
@@ -85,8 +85,8 @@ def _ctx_from_request() -> tuple[dict, list[str]]:
     dbg.append(f"request.query_string={request.query_string.decode('utf-8', errors='ignore')}")
     dbg.append(f"request.args={args}")
 
-    block = str(args.get("block", "")).strip()
-    hemi = str(args.get("hemi", "left")).strip()
+    block   = str(args.get("block", "")).strip()
+    hemi    = str(args.get("hemi", "left")).strip()
     mep_raw = args.get("mep", "0")
 
     referer = request.headers.get("Referer", "") or ""
@@ -96,9 +96,9 @@ def _ctx_from_request() -> tuple[dict, list[str]]:
         try:
             u = urlparse(referer)
             q = parse_qs(u.query)
-            block = (q.get("block") or [""])[0].strip()
-            hemi = (q.get("hemi") or ["left"])[0].strip()
-            mep_raw = (q.get("mep") or ["0"])[0]
+            block   = (q.get("block") or [""])[0].strip()
+            hemi    = (q.get("hemi")  or ["left"])[0].strip()
+            mep_raw = (q.get("mep")   or ["0"])[0]
             dbg.append(f"parsed_from_referer={dict((k, v[0] if v else '') for k, v in q.items())}")
         except Exception as e:
             dbg.append(f"referer_parse_error={type(e).__name__}: {e}")
@@ -122,9 +122,7 @@ def _ctx_from_request() -> tuple[dict, list[str]]:
 def _cursor_shapes(x_min: float, x_max: float) -> list[dict]:
     """
     Two draggable vertical cursors as shapes.
-
-    IMPORTANT: These must be shapes[0] and shapes[1] in layout.shapes
-    so that relayoutData parsing stays stable.
+    shapes[0] → min cursor, shapes[1] → max cursor.
     """
     def _one(x):
         return dict(
@@ -197,7 +195,6 @@ def make_figure(t_ms: np.ndarray, y: np.ndarray, points: dict, epoch, title: str
         )
     )
 
-    # visible markers (not draggable)
     fig.add_trace(
         go.Scatter(
             x=[x0, x1],
@@ -264,6 +261,24 @@ def _extract_cursor_x_from_relayout(relayout: dict, fallback_points: dict) -> tu
     return None
 
 
+def _assign_min_max(
+    xa: float, ya: float, xb: float, yb: float
+) -> tuple[list[float], list[float]]:
+    """
+    Bug #14: assign min/max based on which cursor has the lower signal amplitude,
+    not by cursor order (shapes[0] vs shapes[1]).
+
+    Previously, shapes[0] was always written to payload["min"] and shapes[1] to
+    payload["max"]. If the user dragged the "min" cursor to a position with a
+    higher value than the "max" cursor, the labels silently swapped, breaking the
+    downstream peak-to-peak calculation and the marker display in step_peakChecking.
+    """
+    if ya <= yb:
+        return [xa, ya], [xb, yb]
+    else:
+        return [xb, yb], [xa, ya]
+
+
 # -------------------------
 # App factory
 # -------------------------
@@ -314,12 +329,12 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         else:
             try:
                 session = read_json(session_file)
-                epoch = get_epoch_from_session(session)
+                epoch   = get_epoch_from_session(session)
 
                 meps_root = session.get("meps", {}) or {}
                 block = str(ctx["block"])
-                hemi = str(ctx["hemi"])
-                i = int(ctx["mep_idx"])
+                hemi  = str(ctx["hemi"])
+                i     = int(ctx["mep_idx"])
 
                 payload = ((meps_root.get(block) or {}).get(hemi) or {})
                 mins = payload.get("min", []) if isinstance(payload, dict) else []
@@ -355,7 +370,10 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
                         else float(epoch.tmax_ms)
                     )
 
-                    points = {"x": [x0, x1], "y": [_interp_y(x0, t_ms, y), _interp_y(x1, t_ms, y)]}
+                    points = {
+                        "x": [x0, x1],
+                        "y": [_interp_y(x0, t_ms, y), _interp_y(x1, t_ms, y)],
+                    }
                     fig = make_figure(t_ms, y, points, epoch, f"{block} / {hemi} / MEP {i}")
                     ctx_store = {"block": block, "hemi": hemi, "mep_idx": i}
 
@@ -364,7 +382,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
                 fig = _error_figure(f"{type(e).__name__}: {e}")
 
         children = [
-            dcc.Store(id="ctx-store", data=ctx_store),
+            dcc.Store(id="ctx-store",    data=ctx_store),
             dcc.Store(id="points-store", data=points),
         ]
 
@@ -430,7 +448,7 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
             return no_update, no_update
 
         session = read_json(session_file)
-        epoch = get_epoch_from_session(session)
+        epoch   = get_epoch_from_session(session)
 
         t_ms, meps = load_meps_for_block(
             meta,
@@ -444,12 +462,23 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
         i = int(ctx["mep_idx"])
         y = meps[i, :]
 
-        x0, x1 = float(new_xs[0]), float(new_xs[1])
-        new_points = {"x": [x0, x1], "y": [_interp_y(x0, t_ms, y), _interp_y(x1, t_ms, y)]}
+        xa, xb = float(new_xs[0]), float(new_xs[1])
+        ya = _interp_y(xa, t_ms, y)
+        yb = _interp_y(xb, t_ms, y)
+
+        # Bug #14: assign min/max by amplitude value, not cursor order.
+        # This prevents the labels from silently swapping when the user drags
+        # cursor 0 (nominally "min") to a position with a higher y than cursor 1.
+        min_pt, max_pt = _assign_min_max(xa, ya, xb, yb)
+
+        new_points = {
+            "x": [float(min_pt[0]), float(max_pt[0])],
+            "y": [float(min_pt[1]), float(max_pt[1])],
+        }
 
         # AUTO-SAVE min/max to session JSON
         block = str(ctx["block"])
-        hemi = str(ctx["hemi"])
+        hemi  = str(ctx["hemi"])
 
         session.setdefault("meps", {}).setdefault(block, {}).setdefault(hemi, {})
         payload = session["meps"][block][hemi]
@@ -463,8 +492,8 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
             if len(payload[k]) < n_p:
                 payload[k].extend([fill] * (n_p - len(payload[k])))
 
-        payload["min"][i] = [float(new_points["x"][0]), float(new_points["y"][0])]
-        payload["max"][i] = [float(new_points["x"][1]), float(new_points["y"][1])]
+        payload["min"][i] = min_pt
+        payload["max"][i] = max_pt
 
         session["meps"][block][hemi] = payload
         write_json(session_file, session)
@@ -485,8 +514,8 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
 
         session = read_json(session_file)
         block = str(ctx["block"])
-        hemi = str(ctx["hemi"])
-        i = int(ctx["mep_idx"])
+        hemi  = str(ctx["hemi"])
+        i     = int(ctx["mep_idx"])
 
         session.setdefault("meps", {}).setdefault(block, {}).setdefault(hemi, {})
         payload = session["meps"][block][hemi]
@@ -500,11 +529,14 @@ def create_dash_peak_editor(meta: dict, session_file: str | Path) -> Dash:
             if len(payload[k]) < n_p:
                 payload[k].extend([fill] * (n_p - len(payload[k])))
 
-        x0, x1 = float(points["x"][0]), float(points["x"][1])
-        y0, y1 = float(points["y"][0]), float(points["y"][1])
+        xa, xb = float(points["x"][0]), float(points["x"][1])
+        ya, yb = float(points["y"][0]), float(points["y"][1])
 
-        payload["min"][i] = [x0, y0]
-        payload["max"][i] = [x1, y1]
+        # Bug #14: same value-based assignment on manual save.
+        min_pt, max_pt = _assign_min_max(xa, ya, xb, yb)
+
+        payload["min"][i] = min_pt
+        payload["max"][i] = max_pt
 
         session["meps"][block][hemi] = payload
         write_json(session_file, session)

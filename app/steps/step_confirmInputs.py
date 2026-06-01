@@ -8,10 +8,8 @@ Step 2: Show a summary; on confirm, create/update the subject/session JSON.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 
 from app.utils.persistence import (
@@ -23,22 +21,15 @@ from app.utils.persistence import (
 
 def run_step(meta: dict):
     meta = ensure_metadata()
+    # Bug #1: ensure_template_loaded already resolves the template path via
+    # resolve_template_path(), sets meta["exp_name"], meta["channels"] (as list),
+    # and meta["exp_structure"] (including emg_ref logic). The previous code
+    # re-opened the file with open(meta["template_file"]) which failed when
+    # template_file was a bare filename rather than a full path, and also
+    # duplicated — and diverged from — the logic in ensure_template_loaded.
     meta = ensure_template_loaded(meta)
 
     st.subheader("Please confirm your choices:")
-
-    with open(meta["template_file"], "r") as f:
-        template = json.load(f)
-
-    meta["exp_name"] = template["experiment_name"]
-    meta["channels"] = np.array(
-        [
-            template["channels"]["synch_pulse"],
-            template["channels"]["right"],
-            template["channels"]["left"],
-        ]
-    )
-    meta["exp_structure"] = template["experiment_structure"]
 
     hemi_str = " and ".join(meta["hemispheres"]) if meta["hemispheres"] else "none"
     input_name = Path(meta["input_file"]).name
