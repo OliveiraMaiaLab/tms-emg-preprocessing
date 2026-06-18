@@ -44,14 +44,9 @@ interaction.
 ## 2. Clone the repository
 
 ```bash
-# one-time setup so LFS-tracked .bin files download correctly
-git lfs install
-
+git lfs install        # one-time, so the LFS-tracked .bin example data downloads
 git clone <your-repo-url> tms-emg-preprocessing
 cd tms-emg-preprocessing
-
-# if you cloned before running `git lfs install`, fetch the binaries now:
-git lfs pull
 ```
 
 > The example dataset (`example_data/*.bin`) is large (~110 MB each). If you
