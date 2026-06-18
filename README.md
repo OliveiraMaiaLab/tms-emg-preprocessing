@@ -65,7 +65,7 @@ This pipeline has been used and described in:
 
 ```bash
 git lfs install        # one-time, so the LFS-tracked .bin example data downloads
-git clone <your-repo-url> tms-emg-preprocessing
+git clone https://github.com/OliveiraMaiaLab/tms-emg-preprocessing.git tms-emg-preprocessing
 cd tms-emg-preprocessing
 ```
 
