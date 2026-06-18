@@ -16,6 +16,9 @@ from typing import List, Tuple
 import json
 import numpy as np
 
+from scipy.signal import detrend as sp_detrend, savgol_filter
+from skimage.restoration import denoise_wavelet
+
 
 # =============================================================================
 # Session / JSON helpers
@@ -118,6 +121,56 @@ def save_peaks_flag_list(
 
 
 # =============================================================================
+# Signal denoising / filtering
+# =============================================================================
+def denoise_signal(
+    sig: np.ndarray,
+    *,
+    sigma: float | None = None,
+    wavelet: str = "db1",
+    mode: str = "soft",
+    wavelet_levels: int = 3,
+    method: str = "BayesShrink",
+    rescale_sigma: bool = True,
+    sg_window: int = 5,
+    sg_order: int = 3,
+) -> np.ndarray:
+    """
+    Denoise one continuous EMG channel.
+
+    Pipeline (applied in order):
+      1. Wavelet denoising — `wavelet_levels`-level Daubechies (`wavelet`) with
+         `method` (BayesShrink) soft thresholding.
+      2. Savitzky-Golay smoothing (window `sg_window` samples, order `sg_order`),
+         preferred over band-pass filtering to limit waveform distortion.
+      3. Linear detrend to remove slow baseline drift.
+
+    `sigma` is the noise standard deviation (in the same units as `sig`, i.e. uV).
+    Leave it None (default) to let skimage estimate it per channel from the
+    finest wavelet detail coefficients (robust MAD estimate). Because MEPs are
+    sparse (~0.2% of samples in a typical recording), this estimate reads the
+    baseline noise floor reliably and is not inflated by the events. Pass a fixed
+    constant only if you want to hold the denoising strength constant across
+    channels/recordings instead.
+
+    Returns the filtered channel (same shape as `sig`, in uV).
+    """
+    sig = np.asarray(sig, dtype=float)
+
+    den = denoise_wavelet(
+        sig,
+        wavelet=wavelet,
+        mode=mode,
+        wavelet_levels=wavelet_levels,
+        method=method,
+        rescale_sigma=rescale_sigma,
+        sigma=sigma,
+    )
+    smoothed = savgol_filter(den, sg_window, sg_order)
+    return sp_detrend(smoothed)
+
+
+# =============================================================================
 # Binary EMG loading
 # =============================================================================
 def load_data(
@@ -128,9 +181,15 @@ def load_data(
     normalize_voltage: bool = True,
     voltage_gain: float = 133.0,
     reshape: int = 4,
+    filter_signal: bool = True,
+    sigma: float | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load EMG from a uint16 interleaved binary file.
+    When `filter_signal` is True, each EMG channel is denoised on load
+    (wavelet + Savitzky-Golay + detrend); the synch channel is left raw so
+    pulse detection is unaffected. `sigma` is the fixed noise std (uV) passed
+    to the wavelet denoiser; None lets skimage estimate it per channel.
     Returns:
       data: (2, n_samples) [left, right] in uV
       tms_indexes: rising edges from synch channel
@@ -158,6 +217,11 @@ def load_data(
         left  = raw[c_left,  idx]
         right = raw[c_right, idx]
 
+    # Denoise each EMG channel on load (synch channel stays raw, below).
+    if filter_signal:
+        left  = denoise_signal(left,  sigma=sigma)
+        right = denoise_signal(right, sigma=sigma)
+
     data = np.asarray([left, right], dtype=float)
 
     pulse_signal = raw[c_synch, idx]
@@ -179,6 +243,8 @@ def _load_data_cached(
     normalize_voltage: bool = True,
     voltage_gain: float = 133.0,
     reshape: int = 4,
+    filter_signal: bool = True,
+    sigma: float | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Process-level LRU cache around load_data.
@@ -192,6 +258,8 @@ def _load_data_cached(
         normalize_voltage=normalize_voltage,
         voltage_gain=voltage_gain,
         reshape=reshape,
+        filter_signal=filter_signal,
+        sigma=sigma,
     )
 
 
