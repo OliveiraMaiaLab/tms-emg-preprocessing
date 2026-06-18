@@ -1,5 +1,3 @@
----
-
 ## 5. Regenerating the environment files
 
 After installing or upgrading packages, refresh the specs from the **activated**
@@ -25,5 +23,3 @@ python -m pip list --format=freeze > requirements-pip.txt
 >
 > Use `python -m pip list --format=freeze` (not `pip freeze`): in a Conda env,
 > plain `pip freeze` emits unusable `@ file:///C:/...` local paths.
-
----

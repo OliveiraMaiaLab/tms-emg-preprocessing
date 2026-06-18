@@ -1,17 +1,37 @@
-# MEP Preprocessing — Streamlit GUI (dev branch)
+# MEP Preprocessing — Streamlit GUI
 
-**Branch:** `streamlit-gui-dev`
-**Status:** *Developer preview (actively changing). Expect breaking changes.*
+This repository provides a structured preprocessing pipeline for **motor evoked
+potentials (MEPs)** acquired with **transcranial magnetic stimulation (TMS)**.
 
-A **GUI-driven pipeline** for preprocessing **motor evoked potentials (MEPs)**
-acquired with TMS. It wraps the signal-processing steps from the main pipeline
-into an interactive **Streamlit** app that guides you from file selection through
-quality control to export. Some steps embed **Bokeh server** apps (large
-time-series exploration, RangeTools) and **Dash/Plotly** views for richer
-interaction.
+The workflow includes:
 
-> This GUI is intended to replace the older step-by-step guide. The previous
-> implementation remains available in `old_pipeline/` on the `main` branch.
+- **Signal denoising** with a three-level adaptive wavelet filter (Daubechies
+  family, db1) and BayesShrink soft thresholding.
+- **Smoothing** with a Savitzky–Golay filter, chosen over conventional band-pass
+  filtering to minimize distortions.
+- **Automated screening** of trials based on amplitude thresholds and background
+  EMG activity, with criteria adapted from established literature.
+
+The pipeline is designed to facilitate amplitude extraction and quality control
+of MEPs with minimal coding expertise. It combines automated detection with
+guided manual correction to ensure reliable results.
+
+The processing is delivered through an interactive **Streamlit** app; some steps
+embed **Bokeh server** apps (large time-series exploration, RangeTools) and
+**Dash/Plotly** views for richer interaction. A step-by-step guide supports file
+selection, EMG segmentation, epoch definition, visual inspection, and correction
+of flagged trials.
+
+### Citation
+
+This pipeline has been used and described in:
+
+- Faro Viana F, et al. *Reducing motor evoked potential amplitude variability
+  through normalization.* Front Psychiatry. 2024;15:1279072.
+  doi:[10.3389/fpsyt.2024.1279072](https://doi.org/10.3389/fpsyt.2024.1279072)
+- Seybert C, et al. *Replicability of motor cortex-excitability modulation by
+  intermittent theta burst stimulation.* Clin Neurophysiol. 2023;152:22–33.
+  doi:[10.1016/j.clinph.2023.04.014](https://doi.org/10.1016/j.clinph.2023.04.014)
 
 ---
 
@@ -48,10 +68,6 @@ git lfs install        # one-time, so the LFS-tracked .bin example data download
 git clone <your-repo-url> tms-emg-preprocessing
 cd tms-emg-preprocessing
 ```
-
-> The example dataset (`example_data/*.bin`) is large (~110 MB each). If you
-> don't need it, you can skip LFS content with
-> `GIT_LFS_SKIP_SMUDGE=1 git clone <your-repo-url>`.
 
 ---
 
@@ -110,6 +126,7 @@ streamlit run app/main_gui.py
 Streamlit will print a local URL (default http://localhost:8501) and open it in
 your browser.
 
+---
 
 ## Package organization
 
