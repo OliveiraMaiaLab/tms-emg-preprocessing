@@ -37,7 +37,7 @@ DEFAULT_RESEARCHER_ID = ""
 # Single authoritative version definition.
 # To bump the version, change this constant only — it is NOT stored in any
 # user-editable config file, so users cannot accidentally alter it.
-PIPELINE_VERSION = "1.0.0"
+PIPELINE_VERSION = "1.1.0"
 
 
 # =============================================================================

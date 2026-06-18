@@ -3,67 +3,142 @@
 **Branch:** `streamlit-gui-dev`
 **Status:** *Developer preview (actively changing). Expect breaking changes.*
 
-This branch contains a **GUI-driven pipeline** for preprocessing **motor evoked potentials (MEPs)** acquired with TMS. It wraps the established signal-processing steps from the main pipeline into an interactive **Streamlit** app that guides you from file selection to quality control and export.
+A **GUI-driven pipeline** for preprocessing **motor evoked potentials (MEPs)**
+acquired with TMS. It wraps the signal-processing steps from the main pipeline
+into an interactive **Streamlit** app that guides you from file selection through
+quality control to export. Some steps embed **Bokeh server** apps (large
+time-series exploration, RangeTools) and **Dash/Plotly** views for richer
+interaction.
+
+> This GUI is intended to replace the older step-by-step guide. The previous
+> implementation remains available in `old_pipeline/` on the `main` branch.
 
 ---
 
-**Run**
+## 1. Prerequisites
 
-conda activate cfom_mep_preprocessing
-cd /d D:\FV\Projects\pdm_tms\jove_acquisition_preprocessing\tms-emg-preprocessing
-streamlit run main_gui.py
+| Tool | Why | Link |
+|------|-----|------|
+| **Git** | clone the repository | https://git-scm.com/downloads |
+| **Git LFS** | the example `.bin` data is stored via Git LFS | https://git-lfs.com |
+| **Miniconda** (recommended) | create the Python environment | https://www.anaconda.com/download/success |
+
+> A pure-`pip`/`venv` route is also provided (Option B below) if you'd rather
+> not use Conda.
+
+### Install Miniconda
+
+- **Windows** — download and run the *Miniconda3 Windows 64-bit* installer, then
+  use the **"Anaconda Prompt"** for the commands below.
+- **macOS / Linux** — download the installer for your platform and run it, e.g.:
+  ```bash
+  # macOS (Apple Silicon shown; pick the matching installer for your machine)
+  bash Miniconda3-latest-MacOSX-arm64.sh
+  # Linux
+  bash Miniconda3-latest-Linux-x86_64.sh
+  ```
+  Restart your shell afterwards so `conda` is on the `PATH`.
 
 ---
 
-This GUI is intended to replace the older step-by-step guide. The previous implementation remains available in `old_pipeline/` on the `main` branch for reference.
+## 2. Clone the repository
 
---- 
-## 🧪 Environment setup
+```bash
+# one-time setup so LFS-tracked .bin files download correctly
+git lfs install
 
-This project provides three environment specifications:
+git clone <your-repo-url> tms-emg-preprocessing
+cd tms-emg-preprocessing
 
-- **`environment.yml`**  
-  Portable Conda environment specification (package versions pinned, no build hashes).
+# if you cloned before running `git lfs install`, fetch the binaries now:
+git lfs pull
+```
 
-- **`conda-win64-explicit.txt`**  
-  Exact Conda build lock for Windows (fully reproducible on win-64).
-
-- **`requirements-pip.txt`**  
-  Exact pip package versions.
+> The example dataset (`example_data/*.bin`) is large (~110 MB each). If you
+> don't need it, you can skip LFS content with
+> `GIT_LFS_SKIP_SMUDGE=1 git clone <your-repo-url>`.
 
 ---
 
-### ▶️ Option 1 — Create from `environment.yml` (recommended for general use)
+## 3. Set up the environment
+
+This project ships three environment specifications:
+
+| File | Purpose | Platform |
+|------|---------|----------|
+| **`environment.yml`** | curated, portable Conda spec (versions pinned, no build hashes) | Windows / macOS / Linux |
+| **`requirements-pip.txt`** | pure-pip install path (no Conda) | Windows / macOS / Linux |
+| **`conda-win64-explicit.txt`** | exact, build-locked clone of the lab machine | **Windows only** |
+
+### ▶️ Option A — Conda from `environment.yml` *(recommended, cross-platform)*
+
 ```bash
 conda env create -f environment.yml
+conda activate cfom_mep_preprocessing
 ```
 
-### ▶️ Option 2 — Create an exact Windows clone (maximum reproducibility)
+To update an existing env after the spec changes:
 ```bash
-conda create -n <env_name> --file conda-win64-explicit.txt
-conda activate <env_name>
+conda env update -f environment.yml --prune
+```
+
+### ▶️ Option B — Plain virtual environment (pip, no Conda)
+
+```bash
+python -m venv .venv
+# Windows:        .venv\Scripts\activate
+# macOS / Linux:  source .venv/bin/activate
+
+python -m pip install --upgrade pip
 python -m pip install -r requirements-pip.txt
 ```
-Use this option if you need the environment to match the original exactly (same Conda builds and pip versions, Windows only).
+
+### ▶️ Option C — Exact Windows clone *(maximum reproducibility, win-64 only)*
+
+```bash
+conda create -n cfom_mep_preprocessing --file conda-win64-explicit.txt
+conda activate cfom_mep_preprocessing
+```
+Use this only if you need to match the original lab machine bit-for-bit
+(identical Conda builds). It will **not** solve on macOS or Linux.
 
 ---
 
-Package organization
+## 4. Run the app
 
-__init__.py
-main_gui.py
-utils/
-├── persistence.py
-├── tms_module.py
-├── layout.py
-├── peak_checking_io
-├── mep_loading.py
-bk_embedding/
-├── segmentation.py
-├── mepOverlap.py
-steps/
-├── step_input.py
-├── step_confirmInputs.py  
-├── step_segmentation.py
-├── step_mepWindow.py 
-├── step_peakChecking.py
+From the repository root, with the environment activated:
+
+```bash
+streamlit run app/main_gui.py
+```
+
+Streamlit will print a local URL (default http://localhost:8501) and open it in
+your browser.
+
+
+## Package organization
+
+```
+app/
+├── __init__.py
+├── main_gui.py            # entry point / step router (run this)
+├── utils/
+│   ├── persistence.py
+│   ├── tms_module.py
+│   ├── layout.py
+│   ├── dash_peak_editor.py
+│   └── peak_checking_io.py
+├── bk_embedding/
+│   ├── segmentation.py
+│   └── mepOverlap.py
+└── steps/
+    ├── step_input.py
+    ├── step_confirmInputs.py
+    ├── step_segmentation.py
+    ├── step_mepWindow.py
+    ├── step_peakChecking.py
+    ├── step_peakCorrection.py
+    └── step_reviewFlag.py
+```
+
+See `ARCHUTECTURE.md` for the session-file schema and per-module responsibilities.
