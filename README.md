@@ -84,13 +84,8 @@ This project ships three environment specifications:
 ### ▶️ Option A — Conda from `environment.yml` *(recommended, cross-platform)*
 
 ```bash
-conda env create -f environment.yml
+conda create -n cfom_mep_preprocessing -c conda-forge python=3.11 "numpy=1.26.*" "bokeh=2.4.3" scipy scikit-image pywavelets matplotlib-base plotly streamlit dash flask pip
 conda activate cfom_mep_preprocessing
-```
-
-To update an existing env after the spec changes:
-```bash
-conda env update -f environment.yml --prune
 ```
 
 ### ▶️ Option B — Plain virtual environment (pip, no Conda)
@@ -115,7 +110,50 @@ Use this only if you need to match the original lab machine bit-for-bit
 
 ---
 
-## 4. Run the app
+## 4. Configure the GUI settings
+
+The app stores your machine-specific defaults (folder paths, researcher ID) in
+**`config/.tms_emg_gui_settings.json`**. A placeholder version is committed to the
+repo; on a new computer you set it up once.
+
+You do not strictly have to edit it by hand: the file is created automatically the
+first time you launch the app, and the **input** screen writes your choices back to
+it. So the quickest path is to launch the app, set the fields there, and they
+persist. To preset them instead, edit `config/.tms_emg_gui_settings.json`:
+
+```json
+{
+  "template_file": "experiment_template.json",
+  "input_file": "example_data.bin",
+  "output_dir": "OUTPUT_FOLDER",
+  "data_dir": "RAWDATA_FOLDER",
+  "researcher_id": "github"
+}
+```
+
+| Field | What to put | Notes |
+|-------|-------------|-------|
+| `template_file` | `experiment_template.json` | Experiment template (channel map + block structure). Ships in `config/`; leave as-is unless you use a custom template. |
+| `data_dir` | absolute path to your raw `.bin` folder | The input screen lists the `.bin` files found here. Replace `RAWDATA_FOLDER`. |
+| `output_dir` | absolute path for outputs | Where session `.json` files are written (created if missing). Replace `OUTPUT_FOLDER`. |
+| `input_file` | last-selected recording | Set automatically when you pick a file in the GUI; may stay as the example or be left blank. |
+| `researcher_id` | your initials / ID | Stamped into each processed session for provenance. Replace `github`. |
+
+Windows paths work either as `C:/Users/you/data` or escaped `C:\\Users\\you\\data`.
+
+> **This file changes as you use the app.** The GUI rewrites
+> `config/.tms_emg_gui_settings.json` whenever you change paths, so after your first
+> run `git status` will show it modified with *your* local paths. To keep
+> machine-specific values out of commits, tell Git to ignore local changes:
+> ```bash
+> git update-index --skip-worktree config/.tms_emg_gui_settings.json
+> ```
+> (undo with `--no-skip-worktree`). Or keep the placeholder as
+> `config/.tms_emg_gui_settings.example.json` and add the real file to `.gitignore`.
+
+---
+
+## 5. Run the app
 
 From the repository root, with the environment activated:
 
