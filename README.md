@@ -22,6 +22,11 @@ embed **Bokeh server** apps (large time-series exploration, RangeTools) and
 selection, EMG segmentation, epoch definition, visual inspection, and correction
 of flagged trials.
 
+> 📖 **Documentation** lives in [`docs/`](docs/): a [Quick Guide](docs/quickguide.md)
+> for end-to-end usage and a [User Guide](docs/user-guide.md) covering every menu,
+> the output data structure, the meaning of each flag, and how to edit or create
+> experiment templates.
+
 ### Citation
 
 This pipeline has been used and described in:
@@ -48,8 +53,7 @@ This pipeline has been used and described in:
 
 ### Install Miniconda
 
-- **Windows** — download and run the *Miniconda3 Windows 64-bit* installer, then
-  use the **"Anaconda Prompt"** for the commands below.
+- **Windows** — download and run the *Miniconda3 Windows 64-bit* installer.
 - **macOS / Linux** — download the installer for your platform and run it, e.g.:
   ```bash
   # macOS (Apple Silicon shown; pick the matching installer for your machine)
@@ -59,9 +63,18 @@ This pipeline has been used and described in:
   ```
   Restart your shell afterwards so `conda` is on the `PATH`.
 
+> **Which terminal? (Windows)** Use **two** terminals: run the **Git** commands
+> (Step 2) in **Windows PowerShell** (or *Command Prompt*), and run the **Conda**
+> commands and the app (Steps 3 and 5) in the **Anaconda / Miniconda Prompt** —
+> that's where `conda` is on the `PATH`. On **macOS / Linux** a single terminal
+> handles everything once `conda` is initialised.
+
 ---
 
 ## 2. Clone the repository
+
+On **Windows**, run these in **Windows PowerShell** (or *Command Prompt*); on
+**macOS / Linux**, use your terminal.
 
 ```bash
 git lfs install        # one-time, so the LFS-tracked .bin example data downloads
@@ -69,24 +82,39 @@ git clone https://github.com/OliveiraMaiaLab/tms-emg-preprocessing.git tms-emg-p
 cd tms-emg-preprocessing
 ```
 
+![Cloning the repository in Windows PowerShell](docs/images/setup_01_git-clone.png)
+
 ---
 
 ## 3. Set up the environment
 
-This project ships three environment specifications:
+This project provides three ways to set up the environment:
 
-| File | Purpose | Platform |
-|------|---------|----------|
-| **`environment.yml`** | curated, portable Conda spec (versions pinned, no build hashes) | Windows / macOS / Linux |
-| **`requirements-pip.txt`** | pure-pip install path (no Conda) | Windows / macOS / Linux |
-| **`conda-win64-explicit.txt`** | exact, build-locked clone of the lab machine | **Windows only** |
+| Option | How | Platform |
+|--------|-----|----------|
+| **A — Conda** *(recommended)* | the `conda create` command below | Windows / macOS / Linux |
+| **B — pip / venv** | `requirements-pip.txt` | Windows / macOS / Linux |
+| **C — exact Windows clone** | `conda-win64-explicit.txt` | **Windows only** |
 
-### ▶️ Option A — Conda from `environment.yml` *(recommended, cross-platform)*
+### ▶️ Option A — Conda *(recommended, cross-platform)*
+
+On **Windows**, run this in the **Anaconda / Miniconda Prompt** (not PowerShell);
+on **macOS / Linux**, your terminal:
 
 ```bash
 conda create -n cfom_mep_preprocessing -c conda-forge python=3.11 "numpy=1.26.*" "bokeh=2.4.3" scipy scikit-image pywavelets matplotlib-base plotly streamlit dash flask pip
 conda activate cfom_mep_preprocessing
 ```
+
+![conda create command in the Miniconda Prompt](docs/images/setup_02_1_conda-env.png)
+
+When the solver finishes listing packages, type **`y`** to proceed:
+
+![Confirming the environment creation](docs/images/setup_02_2_conda-env.png)
+
+When it completes, activate the environment:
+
+![Environment created and activated](docs/images/setup_02_3_conda-env.png)
 
 ### ▶️ Option B — Plain virtual environment (pip, no Conda)
 
@@ -155,13 +183,19 @@ Windows paths work either as `C:/Users/you/data` or escaped `C:\\Users\\you\\dat
 
 ## 5. Run the app
 
-From the repository root, with the environment activated:
+On **Windows**, in the **Anaconda / Miniconda Prompt**: activate the environment,
+`cd` into the cloned repository, and launch the app (on **macOS / Linux**, do the
+same in your terminal):
 
 ```bash
+conda activate cfom_mep_preprocessing
+cd tms-emg-preprocessing
 streamlit run app/main_gui.py
 ```
 
-Streamlit will print a local URL (default http://localhost:8501) and open it in
+![Activating the environment and launching the app in the Miniconda Prompt](docs/images/setup_03_startapp.png)
+
+Streamlit will print a **Local URL** (default http://localhost:8501) and open it in
 your browser.
 
 ---
@@ -176,8 +210,7 @@ app/
 │   ├── persistence.py
 │   ├── tms_module.py
 │   ├── layout.py
-│   ├── dash_peak_editor.py
-│   └── peak_checking_io.py
+│   └── dash_peak_editor.py
 ├── bk_embedding/
 │   ├── segmentation.py
 │   └── mepOverlap.py
