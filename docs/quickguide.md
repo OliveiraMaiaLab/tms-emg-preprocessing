@@ -60,23 +60,24 @@ this creates (or updates) the session file
 
 ## Step 3 — Segmentation
 
-![Segmentation screen](images/gui_03_segmentation.png)
-
 You see the whole recording in an interactive plot.
 
+1. For each block, **drag-select the time span** it occupies in the recording
+   (e.g. in image baseline-MEPs block). Then click the *Set* button for the 
+   corresponding block in the right side pannel.
+2. When every active block has a span, click **Save segmentation**. The app detects the TMS
+pulses inside each MEP block and computes the pre-activation flags. 
+3. Click **Advance** to continue to the next step.
+
+![Segmentation screen](images/gui_03_segmentation.png)
+
+
+The segmentation view also has a dropdown menu called **Signal display & block settings** for deleting a
+timepoint or a whole segment if the data was not collected; and for **downsampling** the data if image rendering is too slow
+
 1. In **Active blocks**, keep only the blocks present in this recording.
-2. For each block, **drag-select the time span** it occupies in the recording
-   (e.g. the baseline-MEPs block, each post-intervention block, and — if your
-   template uses it — the resting-EMG reference span).
-3. Click **Update** to apply block changes (this refreshes the viewer and clears
+3. Click **Update plot  & block list** to apply block changes (this refreshes the viewer and clears
    ranges for any block you switched off).
-
-When every active block has a span, click **Next**. The app detects the TMS
-pulses inside each MEP block and computes the pre-activation flags.
-
-The segmentation view also has an **extra controls** menu for deleting a
-timepoint or a whole segment and for adjusting the plot **downsampling** (lower it
-to draw long recordings faster):
 
 ![Segmentation extra controls](images/guiextra_01_segmentation.png)
 

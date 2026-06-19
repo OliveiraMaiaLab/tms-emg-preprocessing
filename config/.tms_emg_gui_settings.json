@@ -1,7 +1,7 @@
 {
   "template_file": "experiment_template.json",
   "input_file": "example_data.bin",
-  "output_dir": "C:\\Users\\neuro\\Desktop\\tmp\\output",
-  "data_dir": "C:\\Users\\neuro\\Desktop\\tmp\\tms-eeg-preprocessing\\example_data",
+  "output_dir": "OUTPUT_DIR",
+  "data_dir": "INPUT_DIR",
   "researcher_id": "test"
 }
